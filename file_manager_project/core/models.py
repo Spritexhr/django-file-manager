@@ -19,7 +19,7 @@ class File(models.Model):
         return f'user_{instance.uploaded_by.id}/{filename}'
 
     file = models.FileField(upload_to=get_upload_path)
-    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='files')
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='files',null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
