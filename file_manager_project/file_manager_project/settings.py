@@ -25,8 +25,16 @@ SECRET_KEY = "django-insecure-p@@w3shs=3jh^xloi=yi57w%^bne@18oba98n_hdv61&pl)87=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
-
+ALLOWED_HOSTS = ['gxuncodeclub.top','www.gxuncodeclub.top','116.62.68.29']
+CSRF_TRUSTED_ORIGINS = [
+    'https://gxuncodeclub.top',
+    'http://gxuncodeclub.top',
+    'https://116.62.68.29',
+    'http://116.62.68.29',
+    'https://www.gxuncodeclub.top',
+    'http://www.gxuncodeclub.top',
+    'https://gxuncodeclub.top:8000',
+]
 
 # Application definition
 
@@ -129,3 +137,11 @@ MEDIA_ROOT = BASE_DIR / 'media'
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = '/' # After login, send user to the root file manager
 LOGOUT_REDIRECT_URL = 'login' # After logout, send user back to the login page
+
+# 静态文件设置
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# 安全设置（基本）
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
