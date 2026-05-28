@@ -30,23 +30,29 @@ def file_manager(request, folder_id=None):
         folder_form = FolderForm(request.POST)
 
         # Handle file uploads
-        if 'upload_file' in request.POST and upload_form.is_valid():
-            files = request.FILES.getlist('files')
-            for f in files:
-                File.objects.create(
-                    file=f,
-                    folder=current_folder,
-                    uploaded_by=request.user
-                )
-            return redirect(request.path)
+        if 'upload_file' in request.POST:
+            if upload_form.is_valid():
+                for f in upload_form.cleaned_data['files']:
+                    File.objects.create(
+                        file=f,
+                        folder=current_folder,
+                        uploaded_by=request.user
+                    )
+                return redirect(request.path)
+            for error in upload_form.non_field_errors():
+                messages.error(request, error)
 
         # Handle folder creation
-        if 'create_folder' in request.POST and folder_form.is_valid():
-            new_folder = folder_form.save(commit=False)
-            new_folder.parent = current_folder
-            new_folder.created_by = request.user
-            new_folder.save()
-            return redirect(request.path)
+        if 'create_folder' in request.POST:
+            if folder_form.is_valid():
+                new_folder = folder_form.save(commit=False)
+                new_folder.parent = current_folder
+                new_folder.created_by = request.user
+                new_folder.save()
+                return redirect(request.path)
+            for field, errs in folder_form.errors.items():
+                for err in errs:
+                    messages.error(request, err)
     else:
         upload_form = FileUploadForm()
         folder_form = FolderForm()

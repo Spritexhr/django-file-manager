@@ -10,31 +10,63 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+def _load_dotenv():
+    # Auto-load .env from the repo root (BASE_DIR.parent) or the Django dir
+    # (BASE_DIR). Real environment variables always win — setdefault skips them.
+    for candidate in (BASE_DIR.parent / '.env', BASE_DIR / '.env'):
+        if not candidate.is_file():
+            continue
+        for raw in candidate.read_text(encoding='utf-8').splitlines():
+            line = raw.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, val)
+        break
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-p@@w3shs=3jh^xloi=yi57w%^bne@18oba98n_hdv61&pl)87="
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+_load_dotenv()
 
-ALLOWED_HOSTS = ['gxuncodeclub.top','www.gxuncodeclub.top','116.62.68.29']
-CSRF_TRUSTED_ORIGINS = [
-    'https://gxuncodeclub.top',
-    'http://gxuncodeclub.top',
-    'https://116.62.68.29',
-    'http://116.62.68.29',
-    'https://www.gxuncodeclub.top',
-    'http://www.gxuncodeclub.top',
-    'https://gxuncodeclub.top:8000',
-]
+
+def _env_bool(name, default=False):
+    return os.environ.get(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _env_list(name, default=''):
+    raw = os.environ.get(name, default)
+    return [item.strip() for item in raw.split(',') if item.strip()]
+
+
+DEBUG = _env_bool('DJANGO_DEBUG', default=False)
+
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-dev-only-do-not-use-in-production'
+    else:
+        raise RuntimeError(
+            'DJANGO_SECRET_KEY environment variable must be set when DEBUG=False'
+        )
+
+ALLOWED_HOSTS = _env_list(
+    'DJANGO_ALLOWED_HOSTS',
+    default='gxuncodeclub.top,www.gxuncodeclub.top,116.62.68.29',
+)
+
+CSRF_TRUSTED_ORIGINS = _env_list(
+    'DJANGO_CSRF_TRUSTED_ORIGINS',
+    default='https://gxuncodeclub.top,https://www.gxuncodeclub.top',
+)
 
 # Application definition
 
@@ -123,7 +155,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -135,13 +168,29 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 LOGIN_URL = 'login'
-LOGIN_REDIRECT_URL = '/' # After login, send user to the root file manager
-LOGOUT_REDIRECT_URL = 'login' # After logout, send user back to the login page
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = 'login'
 
-# 静态文件设置
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+# Upload limits — also enforced in core.forms.FileUploadForm for friendlier errors
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+DATA_UPLOAD_MAX_NUMBER_FILES = 20
 
-# 安全设置（基本）
+# Security headers
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
+SESSION_COOKIE_HTTPONLY = True
+
+# Production-only hardening — enabled when DEBUG=False
+if not DEBUG:
+    SECURE_SSL_REDIRECT = _env_bool('DJANGO_SECURE_SSL_REDIRECT', default=True)
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_SECURE_HSTS_SECONDS', 31536000))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    # Set when running behind a TLS-terminating proxy (e.g. nginx)
+    if _env_bool('DJANGO_BEHIND_TLS_PROXY', default=True):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
