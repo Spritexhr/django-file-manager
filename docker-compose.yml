@@ -7,8 +7,11 @@ services:
     env_file: .env
     environment:
       DJANGO_DB_PATH: /app/db_data/db.sqlite3
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             gunicorn file_manager_project.wsgi:application --bind 0.0.0.0:8000 --workers 3 --access-logfile - --error-logfile -"
     ports:
-      - "8000:8000"
+      - "8010:8000"
     volumes:
       - db_data:/app/db_data
       - media:/app/media
