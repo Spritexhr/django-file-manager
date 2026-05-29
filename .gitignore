@@ -41,4 +41,36 @@ logs/
 
 # 临时文件
 *.tmp
-*.temp 
+*.temp
+
+# Python 编译产物 / 打包
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+build/
+dist/
+
+# 测试与类型检查缓存
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite WAL/SHM 边带文件
+*.sqlite3-shm
+*.sqlite3-wal
+
+# 运行时 / 进程文件
+*.pid
+*.sock
+
+# 前端 / 构建(预留)
+node_modules/
+
+# Docker 本地覆写
+docker-compose.override.yml

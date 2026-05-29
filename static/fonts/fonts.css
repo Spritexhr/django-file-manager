@@ -1,0 +1,17 @@
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./inter-var.woff2') format('woff2-variations'),
+       url('./inter-var.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./source-serif-var.woff2') format('woff2-variations'),
+       url('./source-serif-var.woff2') format('woff2');
+}

@@ -1,0 +1,54 @@
+.git/
+.gitignore
+.gitattributes
+
+.venv/
+venv/
+env/
+ENV/
+myenv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Don't bake local DB or uploads into the image
+db.sqlite3
+db.sqlite3-*
+db_data/
+media/
+staticfiles/
+
+# Secrets stay outside the image
+.env
+.env.*
+!.env.example
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build artifacts / scratch
+build/
+dist/
+*.egg-info/
+*.log
+*.bak
+*.backup
+*.tmp
+*.temp
+
+# Tooling artifacts
+node_modules/
+.claude/
+docker-compose.override.yml
+clear_data.py
+test_write_permission

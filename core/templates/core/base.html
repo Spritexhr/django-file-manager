@@ -1,0 +1,69 @@
+{% load static %}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}File Manager{% endblock %}</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  {% block extra_css %}{% endblock %}
+  <script defer src="{% static 'js/vue.global.prod.js' %}"></script>
+  <script defer src="{% static 'js/app.js' %}"></script>
+</head>
+<body>
+
+  {% include 'core/_icons.html' %}
+
+  {% if not hide_header %}
+  <header id="header-app" class="site-header">
+    <div class="container">
+      <a href="{% url 'file_manager_root' %}" class="brand">
+        <span class="brand-mark"><svg><use href="#i-logo"/></svg></span>
+        <span class="brand-text">File Manager</span>
+      </a>
+      <div class="header-actions">
+        <button type="button" class="icon-btn theme-btn" aria-label="Toggle theme" @click="toggleTheme()">
+          <svg class="icon-moon" aria-hidden="true"><use href="#i-moon"/></svg>
+          <svg class="icon-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+        </button>
+        {% if user.is_authenticated %}
+        <div class="user-menu">
+          <button type="button" class="user-trigger" @click="toggleMenu()">
+            <span class="user-avatar">{{ user.username|first|upper }}</span>
+            <span>{{ user.username }}</span>
+          </button>
+          <div class="user-popover" v-show="menuOpen" v-cloak>
+            <div class="popover-header">Signed in as<strong>{{ user.username }}</strong></div>
+            <form method="post" action="{% url 'logout' %}">
+              {% csrf_token %}
+              <button type="submit" class="popover-action danger">
+                <svg><use href="#i-log-out"/></svg>
+                <span>Sign out</span>
+              </button>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+  {% endif %}
+
+  {% if messages %}
+  <div class="toasts" id="toasts-container">
+    {% for m in messages %}
+      <div class="toast {{ m.tags|default:'' }}">{{ m }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% block content %}{% endblock %}
+
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,22 +1,78 @@
-import shutil
 import os
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.decorators import login_required
-from django.contrib import messages
-from django.http import JsonResponse
-from .models import Folder, File
-from .forms import FileUploadForm, FolderForm
+import shutil
+
 from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.db import transaction
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
+
+from .forms import FileUploadForm, FolderForm
+from .models import File, Folder
+
+
+_ICON_MAP = {
+    'image': ({'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'tiff', 'tif'}, 'file-image'),
+    'video': ({'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv'}, 'file-video'),
+    'audio': ({'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus'}, 'file-audio'),
+    'archive': ({'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'zst'}, 'file-archive'),
+    'text': ({'txt', 'md', 'rst', 'csv', 'rtf', 'log',
+              'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+              'py', 'pyw', 'sh', 'bash', 'zsh', 'fish',
+              'js', 'ts', 'tsx', 'jsx', 'vue',
+              'css', 'scss', 'sass', 'less',
+              'go', 'rs', 'java', 'kt', 'swift', 'c', 'cpp', 'h', 'hpp', 'rb', 'php', 'pl', 'lua', 'r',
+              'sql', 'ipynb',
+              'json', 'jsonc', 'yaml', 'yml', 'toml', 'xml',
+              'ini', 'cfg', 'conf', 'env', 'properties',
+              'dockerfile', 'makefile', 'gitignore', 'editorconfig'}, 'file-text'),
+}
+
+
+def _humanize_bytes(n):
+    if n is None:
+        return ''
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    i = 0
+    n = float(n)
+    while n >= 1024 and i < len(units) - 1:
+        n /= 1024
+        i += 1
+    return f'{n:.1f} {units[i]}' if i > 0 and n < 10 else f'{n:.0f} {units[i]}'
+
+
+def _decorate_file(file_obj):
+    name = os.path.basename(file_obj.file.name) if file_obj.file else ''
+    ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+    icon_type = 'file'
+    icon_name = 'file'
+    for kind, (exts, name_) in _ICON_MAP.items():
+        if ext in exts:
+            icon_type = kind
+            icon_name = name_
+            break
+    try:
+        size = file_obj.file.size if file_obj.file else 0
+    except (FileNotFoundError, ValueError):
+        size = 0
+    file_obj.display_name = name
+    file_obj.size_human = _humanize_bytes(size)
+    file_obj.icon_type = icon_type
+    file_obj.icon_name = icon_name
+    return file_obj
+
 
 @login_required
 def file_manager(request, folder_id=None):
-    # Get current folder or root
     if folder_id:
         current_folder = get_object_or_404(Folder, id=folder_id, created_by=request.user)
-        # Build breadcrumbs for navigation
         breadcrumbs = []
         parent = current_folder
-        while parent:
+        seen = set()
+        while parent and parent.id not in seen:
+            seen.add(parent.id)
             breadcrumbs.append(parent)
             parent = parent.parent
         breadcrumbs.reverse()
@@ -24,25 +80,29 @@ def file_manager(request, folder_id=None):
         current_folder = None
         breadcrumbs = []
 
-    # Handle Forms
     if request.method == 'POST':
         upload_form = FileUploadForm(request.POST, request.FILES)
         folder_form = FolderForm(request.POST)
 
-        # Handle file uploads
         if 'upload_file' in request.POST:
             if upload_form.is_valid():
                 for f in upload_form.cleaned_data['files']:
                     File.objects.create(
                         file=f,
                         folder=current_folder,
-                        uploaded_by=request.user
+                        uploaded_by=request.user,
                     )
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return JsonResponse({'success': True})
                 return redirect(request.path)
             for error in upload_form.non_field_errors():
                 messages.error(request, error)
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse(
+                    {'success': False, 'errors': list(upload_form.non_field_errors())},
+                    status=400,
+                )
 
-        # Handle folder creation
         if 'create_folder' in request.POST:
             if folder_form.is_valid():
                 new_folder = folder_form.save(commit=False)
@@ -50,109 +110,114 @@ def file_manager(request, folder_id=None):
                 new_folder.created_by = request.user
                 new_folder.save()
                 return redirect(request.path)
-            for field, errs in folder_form.errors.items():
+            for _, errs in folder_form.errors.items():
                 for err in errs:
                     messages.error(request, err)
     else:
         upload_form = FileUploadForm()
         folder_form = FolderForm()
 
-    # Get content for the current folder
     if current_folder:
-        subfolders = current_folder.subfolders.filter(created_by=request.user)
-        files = current_folder.files.filter(uploaded_by=request.user)
-    else: # Root directory
-        subfolders = Folder.objects.filter(parent__isnull=True, created_by=request.user)
-        files = File.objects.filter(folder__isnull=True, uploaded_by=request.user)
+        subfolders = current_folder.subfolders.filter(created_by=request.user).order_by('name')
+        files = current_folder.files.filter(uploaded_by=request.user).order_by('-uploaded_at')
+    else:
+        subfolders = Folder.objects.filter(parent__isnull=True, created_by=request.user).order_by('name')
+        files = File.objects.filter(folder__isnull=True, uploaded_by=request.user).order_by('-uploaded_at')
 
-    # Get disk capacity 💾
+    files = [_decorate_file(f) for f in files]
+
     total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
     disk_capacity = {
-        'total': f"{total / (1024**3):.2f} GB",
-        'used': f"{used / (1024**3):.2f} GB",
-        'free': f"{free / (1024**3):.2f} GB",
-        'percent_used': f"{(used / total) * 100:.2f}"
+        'total': _humanize_bytes(total),
+        'used': _humanize_bytes(used),
+        'free': _humanize_bytes(free),
+        'percent_used': f'{(used / total) * 100:.1f}',
     }
 
-    context = {
+    return render(request, 'core/file_manager.html', {
         'current_folder': current_folder,
         'subfolders': subfolders,
         'files': files,
         'upload_form': upload_form,
         'folder_form': folder_form,
         'breadcrumbs': breadcrumbs,
-        'disk_capacity': disk_capacity
-    }
-    return render(request, 'core/file_manager.html', context)
+        'disk_capacity': disk_capacity,
+    })
 
-@login_required
-def delete_file(request, file_id):
-    """删除文件"""
-    if request.method == 'POST':
-        file_obj = get_object_or_404(File, id=file_id, uploaded_by=request.user)
-        
-        # 获取文件所在的文件夹ID，用于重定向
-        folder_id = file_obj.folder.id if file_obj.folder else None
-        
-        # 删除物理文件
-        if file_obj.file and os.path.exists(file_obj.file.path):
-            os.remove(file_obj.file.path)
-        
-        # 删除数据库记录
-        file_obj.delete()
-        
-        messages.success(request, f'文件 "{file_obj.file.name.split("/")[-1]}" 已成功删除')
-        
-        # 返回JSON响应（用于AJAX请求）
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return JsonResponse({'success': True, 'message': '文件删除成功'})
-        
-        # 返回重定向到正确的文件夹页面
-        if folder_id:
-            return redirect('file_manager_folder', folder_id=folder_id)
-        else:
-            return redirect('file_manager_root')
-    
-    return redirect('file_manager_root')
 
-@login_required
-def delete_folder(request, folder_id):
-    """删除文件夹（递归删除所有子文件夹和文件）"""
-    if request.method == 'POST':
-        folder_obj = get_object_or_404(Folder, id=folder_id, created_by=request.user)
-        folder_name = folder_obj.name
-        
-        # 获取父文件夹ID，用于重定向
-        parent_folder_id = folder_obj.parent.id if folder_obj.parent else None
-        
-        # 递归删除文件夹及其内容
-        delete_folder_recursive(folder_obj)
-        
-        messages.success(request, f'文件夹 "{folder_name}" 及其所有内容已成功删除')
-        
-        # 返回JSON响应（用于AJAX请求）
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return JsonResponse({'success': True, 'message': '文件夹删除成功'})
-        
-        # 返回重定向到父文件夹页面
-        if parent_folder_id:
-            return redirect('file_manager_folder', folder_id=parent_folder_id)
-        else:
-            return redirect('file_manager_root')
-    
-    return redirect('file_manager_root')
+def _delete_file_record(file_obj):
+    if file_obj.file:
+        try:
+            path = file_obj.file.path
+            if os.path.exists(path):
+                os.remove(path)
+        except (FileNotFoundError, ValueError):
+            pass
+    file_obj.delete()
 
-def delete_folder_recursive(folder):
-    """递归删除文件夹及其所有内容"""
-    # 删除文件夹中的所有文件
-    for file_obj in folder.files.all():
-        if file_obj.file and os.path.exists(file_obj.file.path):
-            os.remove(file_obj.file.path)
-        file_obj.delete()
-    
-    # 递归删除子文件夹
-    for subfolder in folder.subfolders.all():
-        delete_folder_recursive(subfolder)
-    
-    # 删除文件夹本身
+
+def _delete_folder_recursive(folder):
+    for f in folder.files.all():
+        _delete_file_record(f)
+    for sub in folder.subfolders.all():
+        _delete_folder_recursive(sub)
     folder.delete()
+
+
+# Backwards-compat alias still imported elsewhere
+delete_folder_recursive = _delete_folder_recursive
+
+
+@login_required
+@require_POST
+def delete_file(request, file_id):
+    file_obj = get_object_or_404(File, id=file_id, uploaded_by=request.user)
+    folder_id = file_obj.folder_id
+    name = os.path.basename(file_obj.file.name) if file_obj.file else 'file'
+    with transaction.atomic():
+        _delete_file_record(file_obj)
+    messages.success(request, f'文件 "{name}" 已删除')
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return JsonResponse({'success': True})
+    if folder_id:
+        return redirect('file_manager_folder', folder_id=folder_id)
+    return redirect('file_manager_root')
+
+
+@login_required
+@require_POST
+def delete_folder(request, folder_id):
+    folder_obj = get_object_or_404(Folder, id=folder_id, created_by=request.user)
+    name = folder_obj.name
+    parent_id = folder_obj.parent_id
+    with transaction.atomic():
+        _delete_folder_recursive(folder_obj)
+    messages.success(request, f'文件夹 "{name}" 及其内容已删除')
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return JsonResponse({'success': True})
+    if parent_id:
+        return redirect('file_manager_folder', folder_id=parent_id)
+    return redirect('file_manager_root')
+
+
+@login_required
+@require_POST
+def bulk_delete(request):
+    folder_ids = request.POST.getlist('folder_ids[]')
+    file_ids = request.POST.getlist('file_ids[]')
+
+    deleted = 0
+    with transaction.atomic():
+        for fid in folder_ids:
+            folder = get_object_or_404(Folder, id=fid, created_by=request.user)
+            _delete_folder_recursive(folder)
+            deleted += 1
+        for fid in file_ids:
+            obj = get_object_or_404(File, id=fid, uploaded_by=request.user)
+            _delete_file_record(obj)
+            deleted += 1
+
+    messages.success(request, f'已删除 {deleted} 项')
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return JsonResponse({'success': True, 'deleted': deleted})
+    return redirect(request.META.get('HTTP_REFERER') or 'file_manager_root')

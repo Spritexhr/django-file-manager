@@ -1,0 +1,26 @@
+services:
+  web:
+    build: .
+    image: django-file-manager:latest
+    container_name: file-manager
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_DB_PATH: /app/db_data/db.sqlite3
+    ports:
+      - "8000:8000"
+    volumes:
+      - db_data:/app/db_data
+      - media:/app/media
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/login/').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  db_data:
+  media:

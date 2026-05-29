@@ -5,15 +5,33 @@ from django.core.exceptions import ValidationError
 
 from .models import Folder
 
-# Whitelist of allowed file extensions. SVG and HTML are intentionally excluded
-# because they can carry script payloads when served from MEDIA_URL.
+# Whitelist of allowed file extensions.
+# SVG and HTML are intentionally excluded: they can carry script payloads when
+# served from MEDIA_URL and rendered directly by the browser.
 ALLOWED_EXTENSIONS = {
-    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico',
-    'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-    'txt', 'md', 'csv', 'rtf', 'log',
-    'zip', 'rar', '7z', 'tar', 'gz', 'bz2',
-    'mp3', 'wav', 'ogg', 'flac', 'm4a',
-    'mp4', 'avi', 'mov', 'mkv', 'webm',
+    # Images
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'tiff', 'tif',
+    # Documents
+    'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+    # Plain text / markup
+    'txt', 'md', 'rst', 'csv', 'rtf', 'log',
+    # Code
+    'py', 'pyw', 'sh', 'bash', 'zsh', 'fish',
+    'js', 'ts', 'tsx', 'jsx', 'vue',
+    'css', 'scss', 'sass', 'less',
+    'go', 'rs', 'java', 'kt', 'swift', 'c', 'cpp', 'h', 'hpp',
+    'rb', 'php', 'pl', 'lua', 'r',
+    'sql', 'ipynb',
+    # Config / data
+    'json', 'jsonc', 'yaml', 'yml', 'toml', 'xml',
+    'ini', 'cfg', 'conf', 'env', 'properties',
+    'dockerfile', 'makefile', 'gitignore', 'editorconfig',
+    # Archives
+    'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'zst',
+    # Audio
+    'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus',
+    # Video
+    'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv',
 }
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -64,7 +82,15 @@ class FileUploadForm(forms.Form):
                 raise ValidationError(f'文件名包含非法字符: {name}')
 
             ext = os.path.splitext(name)[1].lower().lstrip('.')
-            if not ext or ext not in ALLOWED_EXTENSIONS:
+            # Allow well-known extensionless files (Dockerfile, Makefile, etc.)
+            bare = name.lower()
+            if ext:
+                allowed = ext in ALLOWED_EXTENSIONS
+            else:
+                allowed = bare in {'dockerfile', 'makefile', 'vagrantfile',
+                                   '.gitignore', '.dockerignore', '.editorconfig',
+                                   '.env', '.envrc', 'procfile', 'gemfile', 'rakefile'}
+            if not allowed:
                 raise ValidationError(f'不允许的文件类型: {name}')
 
             if f.size > MAX_FILE_SIZE:
