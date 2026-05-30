@@ -60,12 +60,12 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = _env_list(
     'DJANGO_ALLOWED_HOSTS',
-    default='gxuncodeclub.top,www.gxuncodeclub.top,116.62.68.29,127.0.0.1,localhost',
+    default='pan.gxmzucodeclub.top,gxuncodeclub.top,www.gxuncodeclub.top,116.62.68.29,127.0.0.1,localhost',
 )
 
 CSRF_TRUSTED_ORIGINS = _env_list(
     'DJANGO_CSRF_TRUSTED_ORIGINS',
-    default='https://gxuncodeclub.top,https://www.gxuncodeclub.top',
+    default='https://pan.gxmzucodeclub.top,https://gxuncodeclub.top,https://www.gxuncodeclub.top',
 )
 
 # Application definition
