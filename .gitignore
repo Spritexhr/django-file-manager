@@ -74,3 +74,7 @@ node_modules/
 
 # Docker 本地覆写
 docker-compose.override.yml
+
+# build
+*.tar
+*.gz
