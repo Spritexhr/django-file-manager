@@ -1,16 +1,25 @@
+import json
 import os
 import shutil
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
+from django.db.models import Max
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from .forms import FileUploadForm, FolderForm
 from .models import File, Folder
+
+
+def _next_position(queryset):
+    """Return max(position)+1 within a scope so new items append at the end."""
+    return (queryset.aggregate(m=Max('position'))['m'] or 0) + 1
 
 
 _ICON_MAP = {
@@ -86,12 +95,17 @@ def file_manager(request, folder_id=None):
 
         if 'upload_file' in request.POST:
             if upload_form.is_valid():
+                pos = _next_position(
+                    File.objects.filter(folder=current_folder, uploaded_by=request.user)
+                )
                 for f in upload_form.cleaned_data['files']:
                     File.objects.create(
                         file=f,
                         folder=current_folder,
                         uploaded_by=request.user,
+                        position=pos,
                     )
+                    pos += 1
                 if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                     return JsonResponse({'success': True})
                 return redirect(request.path)
@@ -108,6 +122,9 @@ def file_manager(request, folder_id=None):
                 new_folder = folder_form.save(commit=False)
                 new_folder.parent = current_folder
                 new_folder.created_by = request.user
+                new_folder.position = _next_position(
+                    Folder.objects.filter(parent=current_folder, created_by=request.user)
+                )
                 new_folder.save()
                 return redirect(request.path)
             for _, errs in folder_form.errors.items():
@@ -117,14 +134,38 @@ def file_manager(request, folder_id=None):
         upload_form = FileUploadForm()
         folder_form = FolderForm()
 
+    # Manual (position) order is the source of truth; name/date sorting is done
+    # client-side as a non-destructive view.
     if current_folder:
-        subfolders = current_folder.subfolders.filter(created_by=request.user).order_by('name')
-        files = current_folder.files.filter(uploaded_by=request.user).order_by('-uploaded_at')
+        subfolders = current_folder.subfolders.filter(created_by=request.user).order_by('position', 'name')
+        files = current_folder.files.filter(uploaded_by=request.user).order_by('position', '-uploaded_at')
     else:
-        subfolders = Folder.objects.filter(parent__isnull=True, created_by=request.user).order_by('name')
-        files = File.objects.filter(folder__isnull=True, uploaded_by=request.user).order_by('-uploaded_at')
+        subfolders = Folder.objects.filter(parent__isnull=True, created_by=request.user).order_by('position', 'name')
+        files = File.objects.filter(folder__isnull=True, uploaded_by=request.user).order_by('position', '-uploaded_at')
 
     files = [_decorate_file(f) for f in files]
+
+    folders_json = [
+        {
+            'id': f.id,
+            'name': f.name,
+            'url': reverse('file_manager_folder', args=[f.id]),
+            'created_at': f.created_at,
+        }
+        for f in subfolders
+    ]
+    files_json = [
+        {
+            'id': f.id,
+            'name': f.display_name,
+            'url': f.file.url if f.file else '',
+            'size_human': f.size_human,
+            'icon_type': f.icon_type,
+            'icon_name': f.icon_name,
+            'uploaded_at': f.uploaded_at,
+        }
+        for f in files
+    ]
 
     total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
     disk_capacity = {
@@ -138,6 +179,8 @@ def file_manager(request, folder_id=None):
         'current_folder': current_folder,
         'subfolders': subfolders,
         'files': files,
+        'folders_json': json.dumps(folders_json, cls=DjangoJSONEncoder),
+        'files_json': json.dumps(files_json, cls=DjangoJSONEncoder),
         'upload_form': upload_form,
         'folder_form': folder_form,
         'breadcrumbs': breadcrumbs,
@@ -221,3 +264,33 @@ def bulk_delete(request):
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True, 'deleted': deleted})
     return redirect(request.META.get('HTTP_REFERER') or 'file_manager_root')
+
+
+@login_required
+@require_POST
+def reorder(request):
+    """Persist a drag-and-drop ordering. Accepts kind=folder|file and ids[] in
+    the desired order; sets each item's position to its index. Scoped to the
+    current user so foreign ids are silently ignored."""
+    kind = request.POST.get('kind')
+    ids = request.POST.getlist('ids[]')
+
+    if kind == 'folder':
+        model, owner = Folder, {'created_by': request.user}
+    elif kind == 'file':
+        model, owner = File, {'uploaded_by': request.user}
+    else:
+        return JsonResponse({'success': False, 'error': 'invalid kind'}, status=400)
+
+    # Only ids that actually belong to the user get updated.
+    owned = set(model.objects.filter(id__in=ids, **owner).values_list('id', flat=True))
+    with transaction.atomic():
+        for index, raw_id in enumerate(ids):
+            try:
+                obj_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if obj_id in owned:
+                model.objects.filter(id=obj_id).update(position=index)
+
+    return JsonResponse({'success': True})

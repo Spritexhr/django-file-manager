@@ -35,6 +35,18 @@
             <svg><use href="#i-list"/></svg>
           </button>
         </div>
+        <div class="sort-control" v-cloak>
+          <select class="sort-select" v-model="sortMode" aria-label="排序方式">
+            <option value="manual">手动</option>
+            <option value="name">名称</option>
+            <option value="date">日期</option>
+          </select>
+          <button type="button" class="sort-dir" @click="sortAsc = !sortAsc"
+                  :disabled="sortMode === 'manual'"
+                  :aria-label="sortAsc ? '升序' : '降序'">
+            <svg><use :href="sortAsc ? '#i-arrow-up' : '#i-arrow-down'"/></svg>
+          </button>
+        </div>
         <button type="button" class="btn btn-ghost btn-sm" @click="openFolderDialog()">
           <svg><use href="#i-folder-plus"/></svg><span>New folder</span>
         </button>
@@ -73,42 +85,54 @@
         </div>
       {% else %}
         {# Grid view #}
-        <div class="grid" v-show="viewMode === 'grid'">
-          {% for folder in subfolders %}
-            <a class="grid-item" :class="isSelected('folder', {{ folder.id }}) && 'selected'"
-               href="{% url 'file_manager_folder' folder.id %}">
-              <button type="button" class="item-check"
-                      @click.prevent="toggleSelect('folder', {{ folder.id }})"
-                      aria-label="Select">
-                <svg><use href="#i-check"/></svg>
-              </button>
-              <div class="item-icon folder"><svg><use href="#i-folder"/></svg></div>
-              <span class="item-name" title="{{ folder.name }}">{{ folder.name }}</span>
-              <button type="button" class="item-delete"
-                      @click.prevent="askDelete({ type: 'folder', id: {{ folder.id }}, name: '{{ folder.name|escapejs }}' })"
-                      aria-label="Delete">
-                <svg><use href="#i-x"/></svg>
-              </button>
-            </a>
-          {% endfor %}
-          {% for file in files %}
-            <a class="grid-item" :class="isSelected('file', {{ file.id }}) && 'selected'"
-               href="{{ file.file.url }}" target="_blank" rel="noopener">
-              <button type="button" class="item-check"
-                      @click.prevent="toggleSelect('file', {{ file.id }})"
-                      aria-label="Select">
-                <svg><use href="#i-check"/></svg>
-              </button>
-              <div class="item-icon {{ file.icon_type }}"><svg><use href="#i-{{ file.icon_name }}"/></svg></div>
-              <span class="item-name" title="{{ file.display_name }}">{{ file.display_name }}</span>
-              <span class="item-meta">{{ file.size_human }}</span>
-              <button type="button" class="item-delete"
-                      @click.prevent="askDelete({ type: 'file', id: {{ file.id }}, name: '{{ file.display_name|escapejs }}' })"
-                      aria-label="Delete">
-                <svg><use href="#i-x"/></svg>
-              </button>
-            </a>
-          {% endfor %}
+        <div class="grid" v-show="viewMode === 'grid'" v-cloak>
+          <a v-for="(item, index) in sortedFolders" :key="'g-folder-' + item.id"
+             class="grid-item"
+             :class="[isSelected('folder', item.id) && 'selected',
+                      dragKind === 'folder' && dragIndex === index && 'dragging',
+                      dragKind === 'folder' && dragOverIndex === index && 'drag-over']"
+             :href="item.url"
+             :draggable="sortMode === 'manual'"
+             @dragstart="onDragStart('folder', index, $event)"
+             @dragover.prevent="onDragOver('folder', index)"
+             @drop.prevent="onDrop('folder', index)"
+             @dragend="onDragEnd()">
+            <button type="button" class="item-check"
+                    @click.prevent="toggleSelect('folder', item.id)" aria-label="Select">
+              <svg><use href="#i-check"/></svg>
+            </button>
+            <div class="item-icon folder"><svg><use href="#i-folder"/></svg></div>
+            <span class="item-name" :title="item.name" v-text="item.name"></span>
+            <button type="button" class="item-delete"
+                    @click.prevent="askDelete({ type: 'folder', id: item.id, name: item.name })"
+                    aria-label="Delete">
+              <svg><use href="#i-x"/></svg>
+            </button>
+          </a>
+          <a v-for="(item, index) in sortedFiles" :key="'g-file-' + item.id"
+             class="grid-item"
+             :class="[isSelected('file', item.id) && 'selected',
+                      dragKind === 'file' && dragIndex === index && 'dragging',
+                      dragKind === 'file' && dragOverIndex === index && 'drag-over']"
+             :href="item.url" target="_blank" rel="noopener"
+             :draggable="sortMode === 'manual'"
+             @dragstart="onDragStart('file', index, $event)"
+             @dragover.prevent="onDragOver('file', index)"
+             @drop.prevent="onDrop('file', index)"
+             @dragend="onDragEnd()">
+            <button type="button" class="item-check"
+                    @click.prevent="toggleSelect('file', item.id)" aria-label="Select">
+              <svg><use href="#i-check"/></svg>
+            </button>
+            <div class="item-icon" :class="item.icon_type"><svg><use :href="'#i-' + item.icon_name"/></svg></div>
+            <span class="item-name" :title="item.name" v-text="item.name"></span>
+            <span class="item-meta" v-text="item.size_human"></span>
+            <button type="button" class="item-delete"
+                    @click.prevent="askDelete({ type: 'file', id: item.id, name: item.name })"
+                    aria-label="Delete">
+              <svg><use href="#i-x"/></svg>
+            </button>
+          </a>
         </div>
 
         {# List view #}
@@ -120,52 +144,64 @@
             <span>Modified</span>
             <span></span>
           </div>
-          {% for folder in subfolders %}
-            <a class="list-row" :class="isSelected('folder', {{ folder.id }}) && 'selected'"
-               href="{% url 'file_manager_folder' folder.id %}">
-              <button type="button" class="row-check"
-                      @click.prevent="toggleSelect('folder', {{ folder.id }})"
-                      aria-label="Select">
-                <svg><use href="#i-check"/></svg>
+          <a v-for="(item, index) in sortedFolders" :key="'l-folder-' + item.id"
+             class="list-row"
+             :class="[isSelected('folder', item.id) && 'selected',
+                      dragKind === 'folder' && dragIndex === index && 'dragging',
+                      dragKind === 'folder' && dragOverIndex === index && 'drag-over']"
+             :href="item.url"
+             :draggable="sortMode === 'manual'"
+             @dragstart="onDragStart('folder', index, $event)"
+             @dragover.prevent="onDragOver('folder', index)"
+             @drop.prevent="onDrop('folder', index)"
+             @dragend="onDragEnd()">
+            <button type="button" class="row-check"
+                    @click.prevent="toggleSelect('folder', item.id)" aria-label="Select">
+              <svg><use href="#i-check"/></svg>
+            </button>
+            <span class="row-name">
+              <span class="item-icon folder"><svg><use href="#i-folder"/></svg></span>
+              <span class="name-text" v-text="item.name"></span>
+            </span>
+            <span class="row-size">—</span>
+            <span class="row-time" v-text="fmtDate(item.created_at)"></span>
+            <span class="row-actions">
+              <button type="button" class="item-delete"
+                      @click.prevent="askDelete({ type: 'folder', id: item.id, name: item.name })"
+                      aria-label="Delete">
+                <svg><use href="#i-x"/></svg>
               </button>
-              <span class="row-name">
-                <span class="item-icon folder"><svg><use href="#i-folder"/></svg></span>
-                <span class="name-text">{{ folder.name }}</span>
-              </span>
-              <span class="row-size">—</span>
-              <span class="row-time">{{ folder.created_at|date:"Y-m-d H:i" }}</span>
-              <span class="row-actions">
-                <button type="button" class="item-delete"
-                        @click.prevent="askDelete({ type: 'folder', id: {{ folder.id }}, name: '{{ folder.name|escapejs }}' })"
-                        aria-label="Delete">
-                  <svg><use href="#i-x"/></svg>
-                </button>
-              </span>
-            </a>
-          {% endfor %}
-          {% for file in files %}
-            <a class="list-row" :class="isSelected('file', {{ file.id }}) && 'selected'"
-               href="{{ file.file.url }}" target="_blank" rel="noopener">
-              <button type="button" class="row-check"
-                      @click.prevent="toggleSelect('file', {{ file.id }})"
-                      aria-label="Select">
-                <svg><use href="#i-check"/></svg>
+            </span>
+          </a>
+          <a v-for="(item, index) in sortedFiles" :key="'l-file-' + item.id"
+             class="list-row"
+             :class="[isSelected('file', item.id) && 'selected',
+                      dragKind === 'file' && dragIndex === index && 'dragging',
+                      dragKind === 'file' && dragOverIndex === index && 'drag-over']"
+             :href="item.url" target="_blank" rel="noopener"
+             :draggable="sortMode === 'manual'"
+             @dragstart="onDragStart('file', index, $event)"
+             @dragover.prevent="onDragOver('file', index)"
+             @drop.prevent="onDrop('file', index)"
+             @dragend="onDragEnd()">
+            <button type="button" class="row-check"
+                    @click.prevent="toggleSelect('file', item.id)" aria-label="Select">
+              <svg><use href="#i-check"/></svg>
+            </button>
+            <span class="row-name">
+              <span class="item-icon" :class="item.icon_type"><svg><use :href="'#i-' + item.icon_name"/></svg></span>
+              <span class="name-text" v-text="item.name"></span>
+            </span>
+            <span class="row-size" v-text="item.size_human"></span>
+            <span class="row-time" v-text="fmtDate(item.uploaded_at)"></span>
+            <span class="row-actions">
+              <button type="button" class="item-delete"
+                      @click.prevent="askDelete({ type: 'file', id: item.id, name: item.name })"
+                      aria-label="Delete">
+                <svg><use href="#i-x"/></svg>
               </button>
-              <span class="row-name">
-                <span class="item-icon {{ file.icon_type }}"><svg><use href="#i-{{ file.icon_name }}"/></svg></span>
-                <span class="name-text">{{ file.display_name }}</span>
-              </span>
-              <span class="row-size">{{ file.size_human }}</span>
-              <span class="row-time">{{ file.uploaded_at|date:"Y-m-d H:i" }}</span>
-              <span class="row-actions">
-                <button type="button" class="item-delete"
-                        @click.prevent="askDelete({ type: 'file', id: {{ file.id }}, name: '{{ file.display_name|escapejs }}' })"
-                        aria-label="Delete">
-                  <svg><use href="#i-x"/></svg>
-                </button>
-              </span>
-            </a>
-          {% endfor %}
+            </span>
+          </a>
         </div>
       {% endif %}
     </div>
@@ -260,7 +296,10 @@ window.__FM_CONFIG__ = {
   csrfToken: "{{ csrf_token }}",
   deleteFileUrl: "{% url 'delete_file' 0 %}".replace("/0/", "/__ID__/"),
   deleteFolderUrl: "{% url 'delete_folder' 0 %}".replace("/0/", "/__ID__/"),
-  bulkDeleteUrl: "{% url 'bulk_delete' %}"
+  bulkDeleteUrl: "{% url 'bulk_delete' %}",
+  reorderUrl: "{% url 'reorder' %}",
+  folders: {{ folders_json|safe }},
+  files: {{ files_json|safe }}
 };
 </script>
 {% endblock %}

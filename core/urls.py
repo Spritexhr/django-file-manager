@@ -7,4 +7,5 @@ urlpatterns = [
     path('delete/file/<int:file_id>/', views.delete_file, name='delete_file'),
     path('delete/folder/<int:folder_id>/', views.delete_folder, name='delete_folder'),
     path('delete/bulk/', views.bulk_delete, name='bulk_delete'),
+    path('reorder/', views.reorder, name='reorder'),
 ]

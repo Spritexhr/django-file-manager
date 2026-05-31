@@ -73,6 +73,40 @@
 }
 [data-theme="dark"] .view-toggle button.active { background: var(--bg-tertiary); }
 
+/* === Sort control === */
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sort-select {
+  height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.sort-select:focus { outline: none; border-color: var(--accent); }
+.sort-dir {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sort-dir svg { width: 15px; height: 15px; }
+.sort-dir:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.sort-dir:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* === Selection toolbar === */
 .selection-bar {
   padding: 10px 0;
@@ -145,6 +179,20 @@
   background: var(--accent-bg);
 }
 .grid-item.selected::after { transform: scaleX(1); }
+
+/* === Drag-and-drop reordering === */
+.grid-item[draggable="true"],
+.list-row[draggable="true"] { cursor: grab; }
+.grid-item.dragging,
+.list-row.dragging { opacity: 0.4; }
+.grid-item.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+.list-row.drag-over {
+  box-shadow: 0 -2px 0 var(--accent) inset;
+  background: var(--accent-bg);
+}
 
 .item-icon {
   width: 48px;
@@ -484,9 +532,12 @@
   .list-row { grid-template-columns: 32px 1fr 80px 60px; }
   .list-row .row-time { display: none; }
   .list-header > :nth-child(4) { display: none; }
+  .toolbar-actions { flex-wrap: wrap; gap: 6px; }
+  /* Keep the storage capsule pinned to the bottom so it never overlaps the
+     toolbar (upload / new-folder buttons) at the top on small screens. */
   .storage-capsule {
-    bottom: auto;
-    top: 70px;
+    top: auto;
+    bottom: 16px;
     right: 16px;
     min-width: 0;
     padding: 8px 10px;
@@ -494,5 +545,6 @@
   }
   .storage-capsule .storage-meta { display: none; }
   .storage-capsule .storage-title { margin-bottom: 4px; font-size: 11px; }
+  /* When uploads are active the dock takes the bottom; lift the capsule above it. */
   .upload-dock { left: 16px; right: 16px; width: auto; }
 }

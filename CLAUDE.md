@@ -4,6 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+Local dev runs inside a conda env named `file_manager_project_env` (Django, Pillow,
+gunicorn, whitenoise are installed there — the conda `base` env has no Django).
+Activate it before any `manage.py`/python command:
+
+```bash
+conda activate file_manager_project_env
+```
+
 ```bash
 # Local development (requires .env with DJANGO_DEBUG=true)
 python manage.py runserver

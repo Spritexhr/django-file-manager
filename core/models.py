@@ -7,6 +7,11 @@ class Folder(models.Model):
     parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='subfolders')
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    # User-defined manual ordering (drag-and-drop). Lower = earlier.
+    position = models.PositiveIntegerField(default=0, db_index=True)
+
+    class Meta:
+        ordering = ['position']
 
     def __str__(self):
         return self.name
@@ -22,6 +27,11 @@ class File(models.Model):
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='files',null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    # User-defined manual ordering (drag-and-drop). Lower = earlier.
+    position = models.PositiveIntegerField(default=0, db_index=True)
+
+    class Meta:
+        ordering = ['position']
 
     def __str__(self):
         return self.file.name.split('/')[-1] # Display just the filename

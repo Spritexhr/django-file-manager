@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, watch, nextTick, onMounted, onUnmounted } = Vue;
+const { createApp, ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } = Vue;
 
 // ── Toasts: auto-hide after 4 s ──────────────────────────────────────────────
 const toastsEl = document.getElementById('toasts-container');
@@ -63,7 +63,84 @@ if (fmEl) {
       const fileInputRef = ref(null);
       const folderNameRef = ref(null);
 
+      // ── Items + sorting ──────────────────────────────────────────────────────
+      // Manual (server position) order is the source of truth in `folders`/`files`.
+      const folders = ref(Array.isArray(cfg.folders) ? cfg.folders : []);
+      const files = ref(Array.isArray(cfg.files) ? cfg.files : []);
+      const sortMode = ref(localStorage.getItem('sortMode') || 'manual'); // manual | name | date
+      const sortAsc = ref(localStorage.getItem('sortAsc') !== 'false');   // default ascending
+
       watch(viewMode, v => localStorage.setItem('viewMode', v));
+      watch(sortMode, v => localStorage.setItem('sortMode', v));
+      watch(sortAsc, v => localStorage.setItem('sortAsc', String(v)));
+
+      const sortList = (arr, dateKey) => {
+        if (sortMode.value === 'manual') return arr;
+        const dir = sortAsc.value ? 1 : -1;
+        return arr.slice().sort((a, b) => {
+          let r;
+          if (sortMode.value === 'name') {
+            r = (a.name || '').localeCompare(b.name || '', 'zh', { numeric: true });
+          } else {
+            r = new Date(a[dateKey]) - new Date(b[dateKey]);
+          }
+          return r * dir;
+        });
+      };
+      const sortedFolders = computed(() => sortList(folders.value, 'created_at'));
+      const sortedFiles = computed(() => sortList(files.value, 'uploaded_at'));
+
+      const fmtDate = (iso) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const p = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+      };
+
+      // ── Drag-and-drop reordering (only in manual sort mode) ──────────────────
+      const dragKind = ref(null);   // 'folder' | 'file'
+      const dragIndex = ref(null);
+      const dragOverIndex = ref(null);
+
+      const onDragStart = (kind, index, ev) => {
+        if (sortMode.value !== 'manual') return;
+        dragKind.value = kind;
+        dragIndex.value = index;
+        if (ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = 'move';
+          try { ev.dataTransfer.setData('text/plain', String(index)); } catch (e) { /* noop */ }
+        }
+      };
+      const onDragOver = (kind, index) => {
+        if (sortMode.value !== 'manual' || dragKind.value !== kind) return;
+        dragOverIndex.value = index;
+      };
+      const onDragEnd = () => { dragKind.value = null; dragIndex.value = null; dragOverIndex.value = null; };
+      const onDrop = (kind, index) => {
+        if (sortMode.value !== 'manual' || dragKind.value !== kind) { onDragEnd(); return; }
+        const from = dragIndex.value;
+        if (from === null || from === index) { onDragEnd(); return; }
+        const arr = kind === 'folder' ? folders : files;
+        const next = arr.value.slice();
+        const [moved] = next.splice(from, 1);
+        next.splice(index, 0, moved);
+        arr.value = next;
+        onDragEnd();
+        persistOrder(kind);
+      };
+      const persistOrder = (kind) => {
+        const arr = kind === 'folder' ? folders.value : files.value;
+        const body = new FormData();
+        body.append('csrfmiddlewaretoken', cfg.csrfToken);
+        body.append('kind', kind);
+        arr.forEach(it => body.append('ids[]', it.id));
+        fetch(cfg.reorderUrl, {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body,
+        }).catch(() => { /* best-effort; order is restored on next reload */ });
+      };
 
       const setView = (mode) => { viewMode.value = mode; };
 
@@ -258,6 +335,9 @@ if (fmEl) {
       return {
         viewMode, selected, dragging, uploads, showUploadDock,
         confirm, folderForm, fileInputRef, folderNameRef,
+        folders, files, sortMode, sortAsc, sortedFolders, sortedFiles, fmtDate,
+        dragKind, dragIndex, dragOverIndex,
+        onDragStart, onDragOver, onDrop, onDragEnd,
         setView, isSelected, toggleSelect, clearSelection, selectionCount,
         askDelete, askBulkDelete, cancelConfirm, runConfirm,
         openFolderDialog, closeFolderDialog, submitFolder,
