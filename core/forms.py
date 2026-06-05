@@ -1,6 +1,10 @@
 import os
 
 from django import forms
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
 
 from .models import Folder
@@ -34,10 +38,20 @@ ALLOWED_EXTENSIONS = {
     'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv',
 }
 
-MAX_FILE_SIZE = 50 * 1024 * 1024
-MAX_BATCH_SIZE = 200 * 1024 * 1024
-MAX_FILES_PER_REQUEST = 20
+# Sourced from settings (env-configurable) so large uploads can be enabled without
+# touching code. Falls back to generous defaults if settings are absent.
+MAX_FILE_SIZE = getattr(settings, 'MAX_UPLOAD_FILE_SIZE', 5 * 1024 * 1024 * 1024)
+MAX_BATCH_SIZE = getattr(settings, 'MAX_UPLOAD_BATCH_SIZE', 20 * 1024 * 1024 * 1024)
+MAX_FILES_PER_REQUEST = getattr(settings, 'MAX_UPLOAD_FILES', 20)
 MAX_FILENAME_LENGTH = 200
+
+
+def _fmt_limit(num_bytes):
+    """Human-friendly size for error messages (GB once we cross 1GB, else MB)."""
+    gb = num_bytes / (1024 ** 3)
+    if gb >= 1:
+        return f'{gb:.0f}GB' if gb == int(gb) else f'{gb:.1f}GB'
+    return f'{num_bytes // (1024 * 1024)}MB'
 
 
 class MultipleFileInput(forms.ClearableFileInput):
@@ -95,13 +109,13 @@ class FileUploadForm(forms.Form):
 
             if f.size > MAX_FILE_SIZE:
                 raise ValidationError(
-                    f'{name} 超过单文件大小上限 {MAX_FILE_SIZE // 1024 // 1024}MB'
+                    f'{name} 超过单文件大小上限 {_fmt_limit(MAX_FILE_SIZE)}'
                 )
             total_size += f.size
 
         if total_size > MAX_BATCH_SIZE:
             raise ValidationError(
-                f'本批次总大小超过 {MAX_BATCH_SIZE // 1024 // 1024}MB'
+                f'本批次总大小超过 {_fmt_limit(MAX_BATCH_SIZE)}'
             )
 
         cleaned['files'] = files
@@ -120,3 +134,33 @@ class FolderForm(forms.ModelForm):
         if any(c in name for c in ('/', '\\', '\x00')) or name in ('.', '..'):
             raise ValidationError('文件夹名包含非法字符')
         return name
+
+
+class NewUserForm(forms.Form):
+    """Create a login account from the staff-only user management page."""
+    username = forms.CharField(max_length=150)
+    email = forms.EmailField(required=False)
+    password = forms.CharField()
+    is_staff = forms.BooleanField(required=False)
+
+    def clean_username(self):
+        username = (self.cleaned_data.get('username') or '').strip()
+        if not username:
+            raise ValidationError('用户名不能为空')
+        UnicodeUsernameValidator(
+            message='用户名只能包含字母、数字以及 @/./+/-/_ 字符'
+        )(username)
+        if User.objects.filter(username__iexact=username).exists():
+            raise ValidationError('该用户名已被占用')
+        return username
+
+    def clean_password(self):
+        password = self.cleaned_data.get('password') or ''
+        # Run Django's configured password validators; give the similarity
+        # validator a stand-in user so it can compare against username/email.
+        probe = User(
+            username=self.cleaned_data.get('username', ''),
+            email=self.cleaned_data.get('email', ''),
+        )
+        validate_password(password, probe)
+        return password

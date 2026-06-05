@@ -27,8 +27,11 @@ RUN mkdir -p db_data media
 
 EXPOSE 8000
 
+# --timeout 1800: large uploads (multi-GB) can hold a sync worker busy well past
+# gunicorn's default 30s; without this the worker is killed mid-transfer.
 CMD ["gunicorn", "file_manager_project.wsgi:application", \
      "--bind", "0.0.0.0:8000", \
      "--workers", "3", \
+     "--timeout", "1800", \
      "--access-logfile", "-", \
      "--error-logfile", "-"]

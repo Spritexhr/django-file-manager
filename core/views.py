@@ -1,10 +1,15 @@
 import json
 import os
 import shutil
+from functools import wraps
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Max
@@ -13,8 +18,20 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from .forms import FileUploadForm, FolderForm
+from .forms import FileUploadForm, FolderForm, NewUserForm
 from .models import File, Folder
+
+
+def staff_required(view):
+    """Gate a view to authenticated staff ('管理人员'). Anonymous users are sent to
+    login; logged-in non-staff users get a 403 rather than a redirect loop."""
+    @wraps(view)
+    @login_required
+    def _wrapped(request, *args, **kwargs):
+        if not request.user.is_staff:
+            raise PermissionDenied('需要管理员权限')
+        return view(request, *args, **kwargs)
+    return _wrapped
 
 
 def _next_position(queryset):
@@ -294,3 +311,123 @@ def reorder(request):
                 model.objects.filter(id=obj_id).update(position=index)
 
     return JsonResponse({'success': True})
+
+
+# ── User management (staff only) ─────────────────────────────────────────────
+
+def _can_modify(actor, target):
+    """A staff member may not touch a superuser unless they are one themselves."""
+    return actor.is_superuser or not target.is_superuser
+
+
+@staff_required
+def user_management(request):
+    users = User.objects.order_by('-is_active', 'username')
+    users_json = [
+        {
+            'id': u.id,
+            'username': u.username,
+            'email': u.email,
+            'is_active': u.is_active,
+            'is_staff': u.is_staff,
+            'is_superuser': u.is_superuser,
+            'is_self': u.id == request.user.id,
+            'date_joined': u.date_joined,
+            'last_login': u.last_login,
+        }
+        for u in users
+    ]
+    return render(request, 'core/user_management.html', {
+        'users_json': json.dumps(users_json, cls=DjangoJSONEncoder),
+        'is_superuser': request.user.is_superuser,
+    })
+
+
+@staff_required
+@require_POST
+def user_create(request):
+    form = NewUserForm(request.POST)
+    if not form.is_valid():
+        for errs in form.errors.values():
+            for err in errs:
+                messages.error(request, err)
+        return redirect('user_management')
+
+    user = User.objects.create_user(
+        username=form.cleaned_data['username'],
+        email=form.cleaned_data.get('email', ''),
+        password=form.cleaned_data['password'],
+    )
+    # Only a superuser may mint another admin, to prevent privilege escalation.
+    if request.user.is_superuser and form.cleaned_data.get('is_staff'):
+        user.is_staff = True
+        user.save(update_fields=['is_staff'])
+    messages.success(request, f'用户 "{user.username}" 已创建')
+    return redirect('user_management')
+
+
+@staff_required
+@require_POST
+def user_set_password(request, user_id):
+    target = get_object_or_404(User, id=user_id)
+    if not _can_modify(request.user, target):
+        messages.error(request, '无权修改该用户的密码')
+        return redirect('user_management')
+
+    password = request.POST.get('password', '')
+    try:
+        validate_password(password, target)
+    except ValidationError as exc:
+        for msg in exc.messages:
+            messages.error(request, msg)
+        return redirect('user_management')
+
+    target.set_password(password)
+    target.save(update_fields=['password'])
+    # Don't log the admin out if they just changed their own password.
+    if target.id == request.user.id:
+        update_session_auth_hash(request, target)
+    messages.success(request, f'用户 "{target.username}" 的密码已更新')
+    return redirect('user_management')
+
+
+@staff_required
+@require_POST
+def user_toggle_active(request, user_id):
+    target = get_object_or_404(User, id=user_id)
+    if target.id == request.user.id:
+        messages.error(request, '不能停用自己的账户')
+        return redirect('user_management')
+    if not _can_modify(request.user, target):
+        messages.error(request, '无权操作该用户')
+        return redirect('user_management')
+
+    target.is_active = not target.is_active
+    target.save(update_fields=['is_active'])
+    messages.success(
+        request,
+        f'用户 "{target.username}" 已{"启用" if target.is_active else "停用"}',
+    )
+    return redirect('user_management')
+
+
+@staff_required
+@require_POST
+def user_delete(request, user_id):
+    target = get_object_or_404(User, id=user_id)
+    if target.id == request.user.id:
+        messages.error(request, '不能删除自己的账户')
+        return redirect('user_management')
+    if target.is_superuser:
+        messages.error(request, '不能删除超级管理员账户')
+        return redirect('user_management')
+
+    username = target.username
+    # Folder/File rows cascade with the user; clear their media directory too so
+    # uploaded files aren't left orphaned on disk.
+    user_media = os.path.join(settings.MEDIA_ROOT, f'user_{target.id}')
+    target.delete()
+    if os.path.isdir(user_media):
+        shutil.rmtree(user_media, ignore_errors=True)
+    messages.success(request, f'用户 "{username}" 已删除')
+    return redirect('user_management')

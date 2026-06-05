@@ -346,3 +346,119 @@ if (fmEl) {
     },
   }).mount(fmEl);
 }
+
+// ── User management app (staff only) ─────────────────────────────────────────
+const umEl = document.getElementById('user-management-app');
+if (umEl) {
+  const cfg = window.__UM_CONFIG__ || {};
+
+  // Build + auto-submit a hidden POST form (full reload), mirroring the file
+  // manager's pattern so server-side messages surface as toasts.
+  const submitForm = (url, fields) => {
+    const f = document.createElement('form');
+    f.method = 'POST';
+    f.action = url;
+    const all = Object.assign({ csrfmiddlewaretoken: cfg.csrfToken }, fields);
+    Object.entries(all).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = key;
+      inp.value = value === true ? 'on' : value;
+      f.appendChild(inp);
+    });
+    document.body.appendChild(f);
+    f.submit();
+  };
+
+  const fmtDate = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+
+  createApp({
+    setup() {
+      const users = ref(Array.isArray(cfg.users) ? cfg.users : []);
+      const isSuperuser = !!cfg.isSuperuser;
+      const createForm = reactive({ open: false, username: '', email: '', password: '', is_staff: false });
+      const pwForm = reactive({ open: false, id: null, username: '', password: '' });
+      const confirm = reactive({ open: false, title: '', body: '', action: '确定', danger: true, onConfirm: null });
+      const createNameRef = ref(null);
+      const pwInputRef = ref(null);
+
+      // A non-superuser staff member can't act on a superuser account.
+      const canModify = (u) => isSuperuser || !u.is_superuser;
+
+      const openCreate = () => {
+        Object.assign(createForm, { open: true, username: '', email: '', password: '', is_staff: false });
+        nextTick(() => { if (createNameRef.value) createNameRef.value.focus(); });
+      };
+      const closeCreate = () => { createForm.open = false; };
+      const submitCreate = () => {
+        const username = (createForm.username || '').trim();
+        if (!username || !createForm.password) return;
+        submitForm(cfg.createUrl, {
+          username,
+          email: (createForm.email || '').trim(),
+          password: createForm.password,
+          is_staff: createForm.is_staff ? 'on' : '',
+        });
+      };
+
+      const openPassword = (u) => {
+        Object.assign(pwForm, { open: true, id: u.id, username: u.username, password: '' });
+        nextTick(() => { if (pwInputRef.value) pwInputRef.value.focus(); });
+      };
+      const closePassword = () => { pwForm.open = false; };
+      const submitPassword = () => {
+        if (!pwForm.password) return;
+        submitForm(cfg.setPasswordUrl.replace('__ID__', pwForm.id), { password: pwForm.password });
+      };
+
+      const askToggle = (u) => {
+        Object.assign(confirm, {
+          open: true,
+          title: u.is_active ? `停用 "${u.username}"?` : `启用 "${u.username}"?`,
+          body: u.is_active ? '停用后该用户将无法登录系统。' : '启用后该用户可以重新登录系统。',
+          action: u.is_active ? '停用' : '启用',
+          danger: u.is_active,
+          onConfirm: () => submitForm(cfg.toggleActiveUrl.replace('__ID__', u.id), {}),
+        });
+      };
+      const askDelete = (u) => {
+        Object.assign(confirm, {
+          open: true,
+          title: `删除用户 "${u.username}"?`,
+          body: '该用户及其上传的所有文件都将被永久删除,此操作不可撤销。',
+          action: '删除',
+          danger: true,
+          onConfirm: () => submitForm(cfg.deleteUrl.replace('__ID__', u.id), {}),
+        });
+      };
+      const cancelConfirm = () => { confirm.open = false; confirm.onConfirm = null; };
+      const runConfirm = () => {
+        const fn = confirm.onConfirm;
+        confirm.open = false;
+        confirm.onConfirm = null;
+        if (fn) fn();
+      };
+
+      const onKey = (e) => {
+        if (e.key === 'Escape') { closeCreate(); closePassword(); cancelConfirm(); }
+      };
+      onMounted(() => window.addEventListener('keydown', onKey));
+      onUnmounted(() => window.removeEventListener('keydown', onKey));
+
+      return {
+        users, isSuperuser, createForm, pwForm, confirm,
+        createNameRef, pwInputRef, fmtDate, canModify,
+        openCreate, closeCreate, submitCreate,
+        openPassword, closePassword, submitPassword,
+        askToggle, askDelete, cancelConfirm, runConfirm,
+      };
+    },
+  }).mount(umEl);
+}

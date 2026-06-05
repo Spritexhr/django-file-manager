@@ -1,0 +1,145 @@
+/* === User management table === */
+.user-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+}
+.user-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.6fr 120px 96px 150px 116px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13.5px;
+}
+.user-row:last-child { border-bottom: 0; }
+.user-head {
+  font-size: 11.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+.user-row:not(.user-head):hover { background: var(--bg-secondary); }
+.user-row.is-inactive:not(.user-head) { opacity: 0.55; }
+
+.u-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.u-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.u-username {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.u-tag.self {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.u-email {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.u-badge {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.u-badge.staff { background: var(--accent-bg); color: var(--accent); }
+.u-badge.super { background: var(--danger-bg); color: var(--danger); }
+
+.u-status {
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.u-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; }
+.u-status.on { color: var(--success); }
+.u-status.on::before { background: var(--success); }
+.u-status.off { color: var(--text-muted); }
+.u-status.off::before { background: var(--text-muted); }
+
+.u-time {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.u-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.icon-mini {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.icon-mini svg { width: 15px; height: 15px; }
+.icon-mini:hover:not(:disabled) { border-color: var(--accent-border); color: var(--accent); }
+.icon-mini.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.icon-mini:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* === Modal forms === */
+.stack-form { display: flex; flex-direction: column; gap: 16px; }
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.check-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .user-row { grid-template-columns: 1fr 96px 104px; padding: 10px 12px; }
+  .user-row > :nth-child(2),  /* email */
+  .user-row > :nth-child(4),  /* status */
+  .user-row > :nth-child(5) { /* last login */ display: none; }
+}

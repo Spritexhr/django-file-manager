@@ -1,0 +1,163 @@
+{% extends 'core/base.html' %}
+{% load static %}
+
+{% block title %}用户管理 · File Manager{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{% static 'css/file_manager.css' %}">
+  <link rel="stylesheet" href="{% static 'css/users.css' %}">
+{% endblock %}
+
+{% block content %}
+<div id="user-management-app">
+  {# === Toolbar === #}
+  <div class="sub-header">
+    <div class="container">
+      <nav class="breadcrumbs">
+        <a href="{% url 'file_manager_root' %}" class="home-link">
+          <svg><use href="#i-home"/></svg><span>Home</span>
+        </a>
+        <span class="sep"><svg><use href="#i-chevron-right"/></svg></span>
+        <a class="current"><svg><use href="#i-users"/></svg><span>用户管理</span></a>
+      </nav>
+      <div class="toolbar-actions">
+        <button type="button" class="btn btn-primary btn-sm" @click="openCreate()">
+          <svg><use href="#i-user-plus"/></svg><span>添加用户</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {# === Users table === #}
+  <section class="workspace">
+    <div class="container">
+      <div class="user-table" v-cloak>
+        <div class="user-row user-head">
+          <span>用户名</span>
+          <span>邮箱</span>
+          <span>角色</span>
+          <span>状态</span>
+          <span>最近登录</span>
+          <span></span>
+        </div>
+        <div v-for="u in users" :key="u.id" class="user-row" :class="!u.is_active && 'is-inactive'">
+          <span class="u-name">
+            <span class="u-avatar" v-text="(u.username[0] || '?').toUpperCase()"></span>
+            <span class="u-username" :title="u.username" v-text="u.username"></span>
+            <span v-if="u.is_self" class="u-tag self">你</span>
+          </span>
+          <span class="u-email" :title="u.email" v-text="u.email || '—'"></span>
+          <span>
+            <span v-if="u.is_superuser" class="u-badge super">超级管理员</span>
+            <span v-else-if="u.is_staff" class="u-badge staff">管理员</span>
+            <span v-else class="u-badge">普通用户</span>
+          </span>
+          <span>
+            <span class="u-status" :class="u.is_active ? 'on' : 'off'"
+                  v-text="u.is_active ? '已启用' : '已停用'"></span>
+          </span>
+          <span class="u-time" v-text="fmtDate(u.last_login) || '从未登录'"></span>
+          <span class="u-actions">
+            <button type="button" class="icon-mini" title="修改密码"
+                    :disabled="!canModify(u)" @click="openPassword(u)">
+              <svg><use href="#i-key"/></svg>
+            </button>
+            <button type="button" class="icon-mini"
+                    :title="u.is_active ? '停用账户' : '启用账户'"
+                    :disabled="u.is_self || !canModify(u)" @click="askToggle(u)">
+              <svg><use href="#i-power"/></svg>
+            </button>
+            <button type="button" class="icon-mini danger" title="删除用户"
+                    :disabled="u.is_self || u.is_superuser" @click="askDelete(u)">
+              <svg><use href="#i-trash"/></svg>
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# === Create user modal === #}
+  <div class="modal-backdrop" v-show="createForm.open" v-cloak @click.self="closeCreate()">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3 class="modal-title">添加用户</h3>
+      <form class="stack-form" @submit.prevent="submitCreate()">
+        <div class="field">
+          <label for="newUsername">用户名</label>
+          <input id="newUsername" type="text" class="input" v-model="createForm.username"
+                 ref="createNameRef" autocomplete="off" placeholder="例如 zhangsan" required>
+        </div>
+        <div class="field">
+          <label for="newEmail">邮箱（可选）</label>
+          <input id="newEmail" type="email" class="input" v-model="createForm.email"
+                 autocomplete="off" placeholder="name@example.com">
+        </div>
+        <div class="field">
+          <label for="newPassword">初始密码</label>
+          <input id="newPassword" type="password" class="input" v-model="createForm.password"
+                 autocomplete="new-password" placeholder="至少 8 位，避免过于简单" required>
+        </div>
+        <label v-if="isSuperuser" class="check-row">
+          <input type="checkbox" v-model="createForm.is_staff">
+          <span>授予管理员权限（可进入此用户管理页面）</span>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" @click="closeCreate()">取消</button>
+          <button type="submit" class="btn btn-primary"
+                  :disabled="!createForm.username.trim() || !createForm.password">
+            <svg><use href="#i-user-plus"/></svg><span>创建</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# === Change password modal === #}
+  <div class="modal-backdrop" v-show="pwForm.open" v-cloak @click.self="closePassword()">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3 class="modal-title">修改密码</h3>
+      <p class="modal-body">为用户 <strong v-text="pwForm.username"></strong> 设置一个新密码。</p>
+      <form class="stack-form" @submit.prevent="submitPassword()">
+        <div class="field">
+          <label for="resetPassword">新密码</label>
+          <input id="resetPassword" type="password" class="input" v-model="pwForm.password"
+                 ref="pwInputRef" autocomplete="new-password" placeholder="至少 8 位，避免过于简单" required>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" @click="closePassword()">取消</button>
+          <button type="submit" class="btn btn-primary" :disabled="!pwForm.password">
+            <svg><use href="#i-key"/></svg><span>更新密码</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# === Confirm modal === #}
+  <div class="modal-backdrop" v-show="confirm.open" v-cloak @click.self="cancelConfirm()">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3 class="modal-title" v-text="confirm.title"></h3>
+      <p class="modal-body" v-text="confirm.body"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="cancelConfirm()">取消</button>
+        <button type="button" class="btn" :class="confirm.danger ? 'btn-danger' : 'btn-primary'"
+                @click="runConfirm()" v-text="confirm.action"></button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+window.__UM_CONFIG__ = {
+  csrfToken: "{{ csrf_token }}",
+  createUrl: "{% url 'user_create' %}",
+  setPasswordUrl: "{% url 'user_set_password' 0 %}".replace("/0/", "/__ID__/"),
+  toggleActiveUrl: "{% url 'user_toggle_active' 0 %}".replace("/0/", "/__ID__/"),
+  deleteUrl: "{% url 'user_delete' 0 %}".replace("/0/", "/__ID__/"),
+  isSuperuser: {{ is_superuser|yesno:"true,false" }},
+  users: {{ users_json|safe }}
+};
+</script>
+{% endblock %}

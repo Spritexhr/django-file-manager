@@ -8,4 +8,10 @@ urlpatterns = [
     path('delete/folder/<int:folder_id>/', views.delete_folder, name='delete_folder'),
     path('delete/bulk/', views.bulk_delete, name='bulk_delete'),
     path('reorder/', views.reorder, name='reorder'),
+    # User management (staff only)
+    path('users/', views.user_management, name='user_management'),
+    path('users/create/', views.user_create, name='user_create'),
+    path('users/<int:user_id>/password/', views.user_set_password, name='user_set_password'),
+    path('users/<int:user_id>/toggle-active/', views.user_toggle_active, name='user_toggle_active'),
+    path('users/<int:user_id>/delete/', views.user_delete, name='user_delete'),
 ]

@@ -47,6 +47,13 @@ def _env_list(name, default=''):
     return [item.strip() for item in raw.split(',') if item.strip()]
 
 
+def _env_int(name, default):
+    try:
+        return int(str(os.environ.get(name, '')).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 DEBUG = _env_bool('DJANGO_DEBUG', default=False)
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
@@ -181,10 +188,19 @@ LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = 'login'
 
-# Upload limits — also enforced in core.forms.FileUploadForm for friendlier errors
+# Upload limits — also enforced in core.forms.FileUploadForm for friendlier errors.
+# Sizes here are configurable via env (in MB) so large files (>1GB) can be allowed
+# without code changes. Defaults: 5GB per file, 20GB per batch, 20 files/request.
+MAX_UPLOAD_FILES = _env_int('DJANGO_MAX_UPLOAD_FILES', 20)
+MAX_UPLOAD_FILE_SIZE = _env_int('DJANGO_MAX_UPLOAD_FILE_MB', 5120) * 1024 * 1024
+MAX_UPLOAD_BATCH_SIZE = _env_int('DJANGO_MAX_UPLOAD_BATCH_MB', 20480) * 1024 * 1024
+
+# Files larger than this stream to a temp file on disk instead of living in memory,
+# so a multi-GB upload never loads fully into RAM. Non-file form data is still
+# capped (this does NOT limit uploaded file size — only the surrounding fields).
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
-DATA_UPLOAD_MAX_NUMBER_FILES = 20
+DATA_UPLOAD_MAX_NUMBER_FILES = MAX_UPLOAD_FILES
 
 # Security headers
 SECURE_BROWSER_XSS_FILTER = True

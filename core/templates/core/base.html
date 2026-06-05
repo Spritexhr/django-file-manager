@@ -39,6 +39,12 @@
           </button>
           <div class="user-popover" v-show="menuOpen" v-cloak>
             <div class="popover-header">Signed in as<strong>{{ user.username }}</strong></div>
+            {% if user.is_staff %}
+            <a href="{% url 'user_management' %}" class="popover-action">
+              <svg><use href="#i-users"/></svg>
+              <span>用户管理</span>
+            </a>
+            {% endif %}
             <form method="post" action="{% url 'logout' %}">
               {% csrf_token %}
               <button type="submit" class="popover-action danger">

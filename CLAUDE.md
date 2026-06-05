@@ -62,7 +62,9 @@ Single Django app (`core`) with no external database dependency — SQLite only,
 
 Auth (`/login/`, `/logout/`) is handled by Django's built-in auth views, not in `core`.
 
-**File validation** (`core/forms.py`): Extension whitelist in `ALLOWED_EXTENSIONS`. SVG and HTML are intentionally excluded to prevent script injection via `MEDIA_URL`. Per-file limit: 50MB; batch limit: 200MB; max 20 files per request.
+**File validation** (`core/forms.py`): Extension whitelist in `ALLOWED_EXTENSIONS`. SVG and HTML are intentionally excluded to prevent script injection via `MEDIA_URL`. Upload limits are env-configurable in `settings.py` (`MAX_UPLOAD_FILE_SIZE`, `MAX_UPLOAD_BATCH_SIZE`, `MAX_UPLOAD_FILES`) and re-read by the form for friendly errors. Defaults: 5GB per file, 20GB per batch, 20 files per request. Tune via `DJANGO_MAX_UPLOAD_FILE_MB` / `DJANGO_MAX_UPLOAD_BATCH_MB` / `DJANGO_MAX_UPLOAD_FILES`. **The reverse proxy (nginx) sets the real ceiling** — large uploads also need `client_max_body_size` raised there (see `.env.example`), and gunicorn runs with `--timeout 1800` so multi-GB transfers aren't killed.
+
+**User management** (`core/views.py`): Staff-only (`@staff_required`, gated on `user.is_staff`). The `user_management` view renders `core/user_management.html` (a Vue app); `user_create`, `user_set_password`, `user_toggle_active`, `user_delete` are `@require_POST` and redirect back with messages. Guards: nobody can delete/disable themselves, only a superuser can act on a superuser or grant the staff flag, and superuser accounts can't be deleted from the UI (use Django admin). The entry point is a "用户管理" link in the header user menu, shown only to staff.
 
 **Static files**: WhiteNoise serves compressed/hashed static assets. `STATICFILES_DIRS` points to `static/`; `STATIC_ROOT` is `staticfiles/` (built at image build time). Do not edit files in `staticfiles/` — run `collectstatic` instead.
 
