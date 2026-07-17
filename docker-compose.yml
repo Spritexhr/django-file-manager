@@ -1,6 +1,11 @@
 services:
   web:
-    build: .
+    build:
+      context: .
+      # This host's Docker bridge can stall on package/CDN downloads while the
+      # host network remains healthy. Build steps only; runtime networking is
+      # unchanged.
+      network: host
     image: django-file-manager:latest
     container_name: file-manager
     restart: unless-stopped
@@ -38,6 +43,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.samba
+      network: host
     image: django-file-manager-samba:latest
     container_name: file-manager-samba
     restart: unless-stopped
