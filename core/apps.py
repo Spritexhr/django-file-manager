@@ -1,7 +1,4 @@
-from pathlib import Path
-
 from django.apps import AppConfig
-from django.conf import settings
 
 
 class CoreConfig(AppConfig):
@@ -9,4 +6,6 @@ class CoreConfig(AppConfig):
     name = "core"
 
     def ready(self):
-        Path(settings.MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
+        # Import lifecycle hooks without touching the shared filesystem or
+        # requiring Samba to be available during application startup.
+        from . import signals  # noqa: F401

@@ -10,8 +10,8 @@ from django.core.exceptions import ValidationError
 from .models import Folder
 
 # Whitelist of allowed file extensions.
-# SVG and HTML are intentionally excluded: they can carry script payloads when
-# served from MEDIA_URL and rendered directly by the browser.
+# SVG and HTML are intentionally excluded as defense in depth: even though
+# downloads are authenticated, these formats can carry active script payloads.
 ALLOWED_EXTENSIONS = {
     # Images
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'tiff', 'tif',
@@ -44,6 +44,29 @@ MAX_FILE_SIZE = getattr(settings, 'MAX_UPLOAD_FILE_SIZE', 5 * 1024 * 1024 * 1024
 MAX_BATCH_SIZE = getattr(settings, 'MAX_UPLOAD_BATCH_SIZE', 20 * 1024 * 1024 * 1024)
 MAX_FILES_PER_REQUEST = getattr(settings, 'MAX_UPLOAD_FILES', 20)
 MAX_FILENAME_LENGTH = 200
+
+WINDOWS_FORBIDDEN_CHARS = set('<>:"/\\|?*')
+WINDOWS_RESERVED_NAMES = {
+    'con', 'prn', 'aux', 'nul',
+    *(f'com{i}' for i in range(1, 10)),
+    *(f'lpt{i}' for i in range(1, 10)),
+}
+
+
+def _validate_portable_name(name, *, label='文件名'):
+    """Reject names that cannot be represented safely on an SMB share."""
+    if (
+        not name
+        or name in ('.', '..')
+        or name[-1] in (' ', '.')
+        or any(ord(char) < 32 or char in WINDOWS_FORBIDDEN_CHARS for char in name)
+    ):
+        raise ValidationError(f'{label}包含 SMB/Windows 不支持的字符: {name}')
+
+    # Windows reserves these basenames even when an extension is present.
+    stem = name.split('.', 1)[0].rstrip(' .').lower()
+    if stem in WINDOWS_RESERVED_NAMES:
+        raise ValidationError(f'{label}是 SMB/Windows 保留名称: {name}')
 
 
 def _fmt_limit(num_bytes):
@@ -92,8 +115,7 @@ class FileUploadForm(forms.Form):
             name = f.name or ''
             if len(name) > MAX_FILENAME_LENGTH:
                 raise ValidationError(f'文件名过长: {name[:40]}...')
-            if any(c in name for c in ('\x00', '/', '\\')) or name in ('.', '..'):
-                raise ValidationError(f'文件名包含非法字符: {name}')
+            _validate_portable_name(name)
 
             ext = os.path.splitext(name)[1].lower().lstrip('.')
             # Allow well-known extensionless files (Dockerfile, Makefile, etc.)
@@ -123,6 +145,11 @@ class FileUploadForm(forms.Form):
 
 
 class FolderForm(forms.ModelForm):
+    def __init__(self, *args, user=None, parent=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user = user
+        self.parent = parent
+
     class Meta:
         model = Folder
         fields = ['name']
@@ -131,8 +158,13 @@ class FolderForm(forms.ModelForm):
         name = (self.cleaned_data.get('name') or '').strip()
         if not name:
             raise ValidationError('文件夹名不能为空')
-        if any(c in name for c in ('/', '\\', '\x00')) or name in ('.', '..'):
-            raise ValidationError('文件夹名包含非法字符')
+        _validate_portable_name(name, label='文件夹名')
+        if self.user and Folder.objects.filter(
+            created_by=self.user,
+            parent=self.parent,
+            name__iexact=name,
+        ).exclude(pk=self.instance.pk).exists():
+            raise ValidationError('同一目录下已存在同名文件夹')
         return name
 
 

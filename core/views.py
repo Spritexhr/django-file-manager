@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 from functools import wraps
@@ -11,15 +12,26 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Max
-from django.http import JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 
+from .downloads import build_download_response
+from .file_operations import (
+    delete_file_record as _delete_stored_file_record,
+    delete_folder_tree,
+    delete_user_files,
+    save_uploaded_files,
+)
+from .filesystem_sync import ensure_folder_directory, sync_directory
 from .forms import FileUploadForm, FolderForm, NewUserForm
 from .models import File, Folder
+
+
+logger = logging.getLogger(__name__)
 
 
 def staff_required(view):
@@ -70,7 +82,9 @@ def _humanize_bytes(n):
 
 
 def _decorate_file(file_obj):
-    name = os.path.basename(file_obj.file.name) if file_obj.file else ''
+    name = file_obj.original_name or (
+        os.path.basename(file_obj.file.name) if file_obj.file else ''
+    )
     ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
     icon_type = 'file'
     icon_name = 'file'
@@ -80,8 +94,13 @@ def _decorate_file(file_obj):
             icon_name = name_
             break
     try:
-        size = file_obj.file.size if file_obj.file else 0
-    except (FileNotFoundError, ValueError):
+        if file_obj.size is None and file_obj.file:
+            file_obj.size = file_obj.file.size
+            type(file_obj).objects.filter(pk=file_obj.pk, size__isnull=True).update(
+                size=file_obj.size
+            )
+        size = file_obj.size or 0
+    except (OSError, ValueError):
         size = 0
     file_obj.display_name = name
     file_obj.size_human = _humanize_bytes(size)
@@ -108,21 +127,47 @@ def file_manager(request, folder_id=None):
 
     if request.method == 'POST':
         upload_form = FileUploadForm(request.POST, request.FILES)
-        folder_form = FolderForm(request.POST)
+        folder_form = FolderForm(
+            request.POST,
+            user=request.user,
+            parent=current_folder,
+        )
 
         if 'upload_file' in request.POST:
             if upload_form.is_valid():
                 pos = _next_position(
                     File.objects.filter(folder=current_folder, uploaded_by=request.user)
                 )
-                for f in upload_form.cleaned_data['files']:
-                    File.objects.create(
-                        file=f,
+                try:
+                    save_uploaded_files(
+                        upload_form.cleaned_data['files'],
+                        user=request.user,
                         folder=current_folder,
-                        uploaded_by=request.user,
-                        position=pos,
+                        start_position=pos,
                     )
-                    pos += 1
+                except IntegrityError:
+                    logger.warning(
+                        'Upload path was indexed concurrently for user %s',
+                        request.user.pk,
+                    )
+                    error = '文件已由共享存储同步，请刷新后重试'
+                    messages.error(request, error)
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        return JsonResponse(
+                            {'success': False, 'errors': [error]},
+                            status=409,
+                        )
+                    return redirect(request.path)
+                except OSError:
+                    logger.exception('Storage failure while user %s uploaded files', request.user.pk)
+                    error = '文件存储暂不可用，请稍后重试'
+                    messages.error(request, error)
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        return JsonResponse(
+                            {'success': False, 'errors': [error]},
+                            status=503,
+                        )
+                    return redirect(request.path)
                 if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                     return JsonResponse({'success': True})
                 return redirect(request.path)
@@ -142,14 +187,51 @@ def file_manager(request, folder_id=None):
                 new_folder.position = _next_position(
                     Folder.objects.filter(parent=current_folder, created_by=request.user)
                 )
-                new_folder.save()
+                try:
+                    new_folder.save()
+                except IntegrityError:
+                    messages.error(request, '同一目录下已存在同名文件夹')
+                    return redirect(request.path)
+                try:
+                    ensure_folder_directory(new_folder)
+                except OSError:
+                    logger.exception(
+                        'Unable to create storage directory for folder %s',
+                        new_folder.pk,
+                    )
+                    new_folder.delete()
+                    messages.error(request, '无法在共享存储中创建文件夹，请稍后重试')
+                    return redirect(request.path)
                 return redirect(request.path)
             for _, errs in folder_form.errors.items():
                 for err in errs:
                     messages.error(request, err)
     else:
         upload_form = FileUploadForm()
-        folder_form = FolderForm()
+        folder_form = FolderForm(user=request.user, parent=current_folder)
+
+    if request.method == 'GET' and getattr(
+        settings, 'FILESYSTEM_SYNC_ON_BROWSE', False
+    ):
+        try:
+            # Browsing only imports/refreshes. Destructive pruning remains an
+            # explicit `sync_samba --prune` maintenance action.
+            sync_stats = sync_directory(request.user, current_folder, prune=False)
+            if sync_stats['errors']:
+                logger.warning(
+                    'Shared storage sync for user %s completed with %s errors',
+                    request.user.pk,
+                    len(sync_stats['errors']),
+                )
+                messages.warning(
+                    request,
+                    '共享存储同步不完整，部分项目暂未更新',
+                )
+        except OSError:
+            logger.exception(
+                'Unable to synchronize shared storage for user %s', request.user.pk
+            )
+            messages.warning(request, '共享存储暂时无法同步，当前显示数据库中的内容')
 
     # Manual (position) order is the source of truth; name/date sorting is done
     # client-side as a non-destructive view.
@@ -175,7 +257,7 @@ def file_manager(request, folder_id=None):
         {
             'id': f.id,
             'name': f.display_name,
-            'url': f.file.url if f.file else '',
+            'url': reverse('download_file', args=[f.id]) if f.file else '',
             'size_human': f.size_human,
             'icon_type': f.icon_type,
             'icon_name': f.icon_name,
@@ -184,13 +266,26 @@ def file_manager(request, folder_id=None):
         for f in files
     ]
 
-    total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
-    disk_capacity = {
-        'total': _humanize_bytes(total),
-        'used': _humanize_bytes(used),
-        'free': _humanize_bytes(free),
-        'percent_used': f'{(used / total) * 100:.1f}',
-    }
+    try:
+        total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
+        disk_capacity = {
+            'available': True,
+            'label': getattr(settings, 'FILE_STORAGE_LABEL', '共享存储'),
+            'total': _humanize_bytes(total),
+            'used': _humanize_bytes(used),
+            'free': _humanize_bytes(free),
+            'percent_used': f'{(used / total) * 100:.1f}' if total else '0.0',
+        }
+    except OSError:
+        logger.exception('Unable to read shared storage capacity')
+        disk_capacity = {
+            'available': False,
+            'label': getattr(settings, 'FILE_STORAGE_LABEL', '共享存储'),
+            'total': '',
+            'used': '',
+            'free': '',
+            'percent_used': '0.0',
+        }
 
     return render(request, 'core/file_manager.html', {
         'current_folder': current_folder,
@@ -206,22 +301,11 @@ def file_manager(request, folder_id=None):
 
 
 def _delete_file_record(file_obj):
-    if file_obj.file:
-        try:
-            path = file_obj.file.path
-            if os.path.exists(path):
-                os.remove(path)
-        except (FileNotFoundError, ValueError):
-            pass
-    file_obj.delete()
+    _delete_stored_file_record(file_obj)
 
 
 def _delete_folder_recursive(folder):
-    for f in folder.files.all():
-        _delete_file_record(f)
-    for sub in folder.subfolders.all():
-        _delete_folder_recursive(sub)
-    folder.delete()
+    delete_folder_tree(folder)
 
 
 # Backwards-compat alias still imported elsewhere
@@ -229,13 +313,38 @@ delete_folder_recursive = _delete_folder_recursive
 
 
 @login_required
+@require_http_methods(['GET', 'HEAD'])
+def download_file(request, file_id):
+    """Stream an owned file without exposing MEDIA_ROOT or Samba credentials."""
+    file_obj = get_object_or_404(File, id=file_id, uploaded_by=request.user)
+    try:
+        return build_download_response(request, file_obj)
+    except FileNotFoundError as exc:
+        raise Http404('文件不存在') from exc
+    except OSError:
+        logger.exception('Unable to open stored file %s for download', file_obj.pk)
+        return HttpResponse('共享存储暂不可用，请稍后重试', status=503)
+
+
+@login_required
 @require_POST
 def delete_file(request, file_id):
     file_obj = get_object_or_404(File, id=file_id, uploaded_by=request.user)
     folder_id = file_obj.folder_id
-    name = os.path.basename(file_obj.file.name) if file_obj.file else 'file'
-    with transaction.atomic():
+    name = file_obj.original_name or (
+        os.path.basename(file_obj.file.name) if file_obj.file else 'file'
+    )
+    try:
         _delete_file_record(file_obj)
+    except OSError:
+        logger.exception('Unable to delete stored file %s', file_obj.pk)
+        error = '共享存储暂不可用，文件尚未删除'
+        messages.error(request, error)
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'success': False, 'error': error}, status=503)
+        if folder_id:
+            return redirect('file_manager_folder', folder_id=folder_id)
+        return redirect('file_manager_root')
     messages.success(request, f'文件 "{name}" 已删除')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True})
@@ -250,8 +359,15 @@ def delete_folder(request, folder_id):
     folder_obj = get_object_or_404(Folder, id=folder_id, created_by=request.user)
     name = folder_obj.name
     parent_id = folder_obj.parent_id
-    with transaction.atomic():
+    try:
         _delete_folder_recursive(folder_obj)
+    except OSError:
+        logger.exception('Unable to delete storage folder %s', folder_obj.pk)
+        error = '共享存储暂不可用，文件夹未能完整删除'
+        messages.error(request, error)
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'success': False, 'error': error}, status=503)
+        return redirect(request.META.get('HTTP_REFERER') or 'file_manager_root')
     messages.success(request, f'文件夹 "{name}" 及其内容已删除')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True})
@@ -267,7 +383,7 @@ def bulk_delete(request):
     file_ids = request.POST.getlist('file_ids[]')
 
     deleted = 0
-    with transaction.atomic():
+    try:
         for fid in folder_ids:
             folder = get_object_or_404(Folder, id=fid, created_by=request.user)
             _delete_folder_recursive(folder)
@@ -276,6 +392,16 @@ def bulk_delete(request):
             obj = get_object_or_404(File, id=fid, uploaded_by=request.user)
             _delete_file_record(obj)
             deleted += 1
+    except OSError:
+        logger.exception('Bulk delete stopped after %s items', deleted)
+        error = f'共享存储暂不可用，已删除 {deleted} 项，其余项目保留'
+        messages.error(request, error)
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse(
+                {'success': False, 'deleted': deleted, 'error': error},
+                status=503,
+            )
+        return redirect(request.META.get('HTTP_REFERER') or 'file_manager_root')
 
     messages.success(request, f'已删除 {deleted} 项')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
@@ -423,11 +549,12 @@ def user_delete(request, user_id):
         return redirect('user_management')
 
     username = target.username
-    # Folder/File rows cascade with the user; clear their media directory too so
-    # uploaded files aren't left orphaned on disk.
-    user_media = os.path.join(settings.MEDIA_ROOT, f'user_{target.id}')
+    try:
+        delete_user_files(target)
+    except OSError:
+        logger.exception('Unable to remove storage for user %s', target.pk)
+        messages.error(request, '共享存储暂不可用，用户及其文件均未删除')
+        return redirect('user_management')
     target.delete()
-    if os.path.isdir(user_media):
-        shutil.rmtree(user_media, ignore_errors=True)
     messages.success(request, f'用户 "{username}" 已删除')
     return redirect('user_management')

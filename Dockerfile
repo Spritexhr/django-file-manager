@@ -16,10 +16,12 @@ COPY file_manager_project/ ./file_manager_project/
 COPY core/ ./core/
 COPY static/ ./static/
 
-# Build static assets bundle. DEBUG=true avoids needing a real SECRET_KEY at
-# build time; the bundle is content-hashed by ManifestStaticFilesStorage and
-# served at runtime by whitenoise.
-RUN DJANGO_DEBUG=true python manage.py collectstatic --noinput
+# Build the same compressed manifest bundle used in production.  This temporary
+# key exists only in the image build step; the running container still requires
+# DJANGO_SECRET_KEY from its environment.
+RUN DJANGO_DEBUG=false \
+    DJANGO_SECRET_KEY=build-only-static-assets-key \
+    python manage.py collectstatic --noinput
 
 # Pre-create runtime data directories so they exist even before the first
 # volume mount + migrate.

@@ -7,14 +7,19 @@ services:
     env_file: .env
     environment:
       DJANGO_DB_PATH: /app/db_data/db.sqlite3
+      DJANGO_MEDIA_ROOT: /app/media
       DJANGO_SECURE_SSL_REDIRECT: "false"
       DJANGO_BEHIND_TLS_PROXY: "true"
       DJANGO_SECURE_HSTS_SECONDS: "0"
+      # .env is also used for Compose interpolation. Do not leak the independent
+      # Samba credential into the Django container.
+      SAMBA_USER: ""
+      SAMBA_PASSWORD: ""
     command: >
       sh -c "python manage.py migrate --noinput &&
              gunicorn file_manager_project.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 1800 --access-logfile - --error-logfile -"
     ports:
-      - "8002:8000"
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8002}:8000"
     volumes:
       - db_data:/app/db_data
       - media:/app/media
@@ -26,6 +31,37 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  samba:
+    profiles:
+      - smb
+    build:
+      context: .
+      dockerfile: Dockerfile.samba
+    image: django-file-manager-samba:latest
+    container_name: file-manager-samba
+    restart: unless-stopped
+    environment:
+      SAMBA_USER: "${SAMBA_USER:-filemanager}"
+      SAMBA_PASSWORD: "${SAMBA_PASSWORD:-}"
+      SAMBA_UID: "${SAMBA_UID:-1000}"
+      SAMBA_GID: "${SAMBA_GID:-1000}"
+    # Loopback-only by default. See docs/SMB.md before exposing this to a LAN.
+    ports:
+      - "${SAMBA_BIND_ADDRESS:-127.0.0.1}:${SAMBA_PORT:-445}:445"
+    volumes:
+      - media:/srv/media
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - smbcontrol smbd ping >/dev/null 2>&1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 30s
 
 volumes:
   db_data:

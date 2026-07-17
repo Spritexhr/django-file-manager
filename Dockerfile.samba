@@ -1,0 +1,21 @@
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends acl samba samba-vfs-modules smbclient tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /srv/media /run/samba
+
+COPY deploy/samba/smb.conf /etc/samba/smb.conf
+COPY deploy/samba/entrypoint.sh /usr/local/bin/samba-entrypoint
+
+RUN chmod 0755 /usr/local/bin/samba-entrypoint \
+    && testparm -s /etc/samba/smb.conf >/dev/null
+
+VOLUME ["/srv/media"]
+EXPOSE 445/tcp
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/samba-entrypoint"]

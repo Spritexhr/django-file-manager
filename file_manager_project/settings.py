@@ -170,11 +170,6 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
 
-STORAGES = {
-    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
-}
-
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -182,7 +177,33 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Media files (user-uploaded files)
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+_media_root_value = os.environ.get('DJANGO_MEDIA_ROOT', '').strip()
+MEDIA_ROOT = Path(_media_root_value).expanduser() if _media_root_value else BASE_DIR / 'media'
+if not MEDIA_ROOT.is_absolute():
+    MEDIA_ROOT = BASE_DIR / MEDIA_ROOT
+
+# Large downloads are streamed in bounded chunks. Invalid or non-positive values
+# fall back to 1 MiB rather than risking unbounded reads.
+FILE_DOWNLOAD_CHUNK_SIZE = _env_int('DJANGO_FILE_DOWNLOAD_CHUNK_KB', 1024) * 1024
+if FILE_DOWNLOAD_CHUNK_SIZE <= 0:
+    FILE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+# When enabled, the file-manager view may reconcile database records with files
+# written directly through the optional Samba sidecar. It is off by default.
+FILESYSTEM_SYNC_ON_BROWSE = _env_bool('DJANGO_FILESYSTEM_SYNC_ON_BROWSE', default=False)
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': (
+            'django.contrib.staticfiles.storage.StaticFilesStorage'
+            if DEBUG
+            else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+        ),
+    },
+}
 
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = '/'
@@ -201,6 +222,13 @@ MAX_UPLOAD_BATCH_SIZE = _env_int('DJANGO_MAX_UPLOAD_BATCH_MB', 20480) * 1024 * 1
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 DATA_UPLOAD_MAX_NUMBER_FILES = MAX_UPLOAD_FILES
+
+# Django applies FILE_UPLOAD_PERMISSIONS after saving, which otherwise narrows
+# the default ACL mask to 0644 and prevents the Samba group from editing files
+# uploaded through the web UI. Keep shared files group-writable and directories
+# setgid so new descendants inherit the volume's Samba group.
+FILE_UPLOAD_PERMISSIONS = 0o660
+FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o2770
 
 # Security headers
 SECURE_BROWSER_XSS_FILTER = True

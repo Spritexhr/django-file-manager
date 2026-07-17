@@ -76,11 +76,11 @@ def clear_all_data():
     else:
         print("媒体目录不存在")
     
-    # 5. 重置数据库序列
+    # 5. 重置数据库序列。迁移历史必须保留，否则下次 migrate 会尝试
+    # 重新创建仍然存在的表。
     print("重置数据库序列...")
     try:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM django_migrations WHERE app = 'core'")
             cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('core_file', 'core_folder', 'auth_user')")
         print("数据库序列已重置")
     except Exception as e:
@@ -89,4 +89,4 @@ def clear_all_data():
     print("数据清理完成！所有用户数据已清除。")
 
 if __name__ == "__main__":
-    clear_all_data() 
+    clear_all_data()

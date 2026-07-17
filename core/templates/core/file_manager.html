@@ -211,13 +211,19 @@
   <div class="storage-capsule">
     <div class="storage-title">
       <svg><use href="#i-hard-drive"/></svg>
-      <span>Storage</span>
+      <span>{{ disk_capacity.label }}</span>
     </div>
-    <div class="storage-bar"><div class="storage-fill" style="width: {{ disk_capacity.percent_used }}%"></div></div>
-    <div class="storage-meta">
-      <span>{{ disk_capacity.used }} / {{ disk_capacity.total }}</span>
-      <span>{{ disk_capacity.percent_used }}%</span>
-    </div>
+    {% if disk_capacity.available %}
+      <div class="storage-bar"><div class="storage-fill" style="width: {{ disk_capacity.percent_used }}%"></div></div>
+      <div class="storage-meta">
+        <span>{{ disk_capacity.used }} / {{ disk_capacity.total }}</span>
+        <span>{{ disk_capacity.percent_used }}%</span>
+      </div>
+    {% else %}
+      <div class="storage-meta">
+        <span>存储容量暂不可用</span>
+      </div>
+    {% endif %}
   </div>
 
   {# === Drop overlay === #}
