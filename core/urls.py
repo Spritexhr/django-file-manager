@@ -3,7 +3,8 @@ from . import views
 
 urlpatterns = [
     path('', views.file_manager, name='file_manager_root'),
-    path('folder/<int:folder_id>/', views.file_manager, name='file_manager_folder'),
+    path('files/<path:folder_path>/', views.file_manager, name='file_manager_folder'),
+    path('folder/<int:folder_id>/', views.legacy_folder_redirect, name='legacy_file_manager_folder'),
     path('download/<int:file_id>/', views.download_file, name='download_file'),
     path('delete/file/<int:file_id>/', views.delete_file, name='delete_file'),
     path('delete/folder/<int:folder_id>/', views.delete_folder, name='delete_folder'),

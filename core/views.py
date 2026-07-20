@@ -95,10 +95,52 @@ def _decorate_file(file_obj):
     return file_obj
 
 
+def _resolve_folder_path(folder_path, *, user):
+    segments = [segment for segment in (folder_path or '').split('/') if segment]
+    if not segments or len(segments) > 1000:
+        raise Http404('文件夹路径无效')
+
+    folder_ids = []
+    for segment in segments:
+        raw_id, separator, _ = segment.partition('-')
+        if not separator:
+            raise Http404('文件夹路径无效')
+        try:
+            folder_id = int(raw_id)
+        except ValueError as exc:
+            raise Http404('文件夹路径无效') from exc
+        if folder_id <= 0 or folder_id in folder_ids:
+            raise Http404('文件夹路径无效')
+        folder_ids.append(folder_id)
+
+    folders = {
+        folder.id: folder
+        for folder in Folder.objects.filter(
+            id__in=folder_ids,
+            created_by=user,
+        ).select_related('parent')
+    }
+    if len(folders) != len(folder_ids):
+        raise Http404('文件夹不存在')
+
+    expected_parent_id = None
+    for folder_id in folder_ids:
+        folder = folders[folder_id]
+        if folder.parent_id != expected_parent_id:
+            raise Http404('文件夹层级不匹配')
+        expected_parent_id = folder.id
+    return folders[folder_ids[-1]]
+
+
 @login_required
-def file_manager(request, folder_id=None):
-    if folder_id:
-        current_folder = get_object_or_404(Folder, id=folder_id, created_by=request.user)
+def file_manager(request, folder_path=None):
+    if folder_path:
+        current_folder = _resolve_folder_path(folder_path, user=request.user)
+        if (
+            request.method in ('GET', 'HEAD')
+            and folder_path != current_folder.get_hierarchical_path()
+        ):
+            return redirect(current_folder.get_absolute_url(), permanent=True)
         breadcrumbs = []
         parent = current_folder
         seen = set()
@@ -198,7 +240,7 @@ def file_manager(request, folder_id=None):
         {
             'id': f.id,
             'name': f.name,
-            'url': reverse('file_manager_folder', args=[f.id]),
+            'url': f.get_absolute_url(),
             'created_at': f.created_at,
         }
         for f in subfolders
@@ -261,6 +303,13 @@ def file_manager(request, folder_id=None):
     })
 
 
+@login_required
+@require_http_methods(['GET', 'HEAD'])
+def legacy_folder_redirect(request, folder_id):
+    folder = get_object_or_404(Folder, id=folder_id, created_by=request.user)
+    return redirect(folder.get_absolute_url(), permanent=True)
+
+
 def _parse_ids(values, *, label):
     if len(values) > 10000:
         raise ValidationError(f'{label}数量过多')
@@ -314,7 +363,12 @@ def delete_file(request, file_id):
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True})
     if folder_id:
-        return redirect('file_manager_folder', folder_id=folder_id)
+        folder = Folder.objects.filter(
+            id=folder_id,
+            created_by=request.user,
+        ).first()
+        if folder:
+            return redirect(folder.get_absolute_url())
     return redirect('file_manager_root')
 
 
@@ -332,7 +386,8 @@ def delete_folder(request, folder_id):
         id=parent_id,
         created_by=request.user,
     ).exists():
-        return redirect('file_manager_folder', folder_id=parent_id)
+        parent = Folder.objects.get(id=parent_id, created_by=request.user)
+        return redirect(parent.get_absolute_url())
     return redirect('file_manager_root')
 
 

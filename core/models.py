@@ -1,7 +1,44 @@
+import re
+import unicodedata
+
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+from django.urls import reverse
+from django.utils.text import slugify
+
+
+FOLDER_NAME_MAX_LENGTH = 100
+_INVALID_FOLDER_NAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+_RESERVED_FOLDER_NAMES = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    *(f'COM{index}' for index in range(1, 10)),
+    *(f'LPT{index}' for index in range(1, 10)),
+}
+
+
+def normalize_folder_name(value):
+    """Return a stable, human-readable virtual folder name."""
+    normalized = unicodedata.normalize('NFKC', str(value or ''))
+    return re.sub(r'\s+', ' ', normalized).strip()
+
+
+def validate_folder_name(value):
+    name = normalize_folder_name(value)
+    if not name:
+        raise ValidationError('文件夹名称不能为空')
+    if len(name) > FOLDER_NAME_MAX_LENGTH:
+        raise ValidationError(f'文件夹名称不能超过 {FOLDER_NAME_MAX_LENGTH} 个字符')
+    if name in ('.', '..') or name.startswith('.') or name.endswith('.'):
+        raise ValidationError('文件夹名称不能以句点开头或结尾')
+    if _INVALID_FOLDER_NAME_CHARS.search(name):
+        raise ValidationError('文件夹名称不能包含 \\ / : * ? " < > | 字符')
+    if any(unicodedata.category(char) in ('Cc', 'Cf') for char in name):
+        raise ValidationError('文件夹名称不能包含控制字符或隐藏格式字符')
+    if name.split('.', 1)[0].upper() in _RESERVED_FOLDER_NAMES:
+        raise ValidationError('该名称是系统保留名称，请使用其他名称')
+    return name
 
 
 def _validate_storage_component(value, *, label):
@@ -46,6 +83,26 @@ class Folder(models.Model):
 
     def clean(self):
         super().clean()
+        # ModelForm excludes a field from model validation after its field
+        # cleaner has already failed. Skip an empty placeholder here so users
+        # receive the original naming error only once.
+        if self.name:
+            try:
+                self.name = validate_folder_name(self.name)
+            except ValidationError as exc:
+                raise ValidationError({'name': exc.messages}) from exc
+
+        if self.created_by_id:
+            duplicate = Folder.objects.filter(
+                created_by_id=self.created_by_id,
+                parent_id=self.parent_id,
+                name__iexact=self.name,
+            )
+            if self.pk:
+                duplicate = duplicate.exclude(pk=self.pk)
+            if duplicate.exists():
+                raise ValidationError({'name': '同一目录下已存在同名文件夹'})
+
         if not self.parent_id:
             return
         if self.created_by_id and self.parent.created_by_id != self.created_by_id:
@@ -61,6 +118,23 @@ class Folder(models.Model):
 
     def __str__(self):
         return self.name
+
+    def get_hierarchical_path(self):
+        segments = []
+        current = self
+        seen = set()
+        while current is not None and current.pk not in seen:
+            seen.add(current.pk)
+            readable = slugify(current.name, allow_unicode=True)[:60] or 'folder'
+            segments.append(f'{current.pk}-{readable}')
+            current = current.parent
+        return '/'.join(reversed(segments))
+
+    def get_absolute_url(self):
+        return reverse(
+            'file_manager_folder',
+            kwargs={'folder_path': self.get_hierarchical_path()},
+        )
 
 class File(models.Model):
     # Use a function to define the upload path dynamically

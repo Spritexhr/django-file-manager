@@ -61,11 +61,12 @@ if (fmEl) {
       const confirm = reactive({ open: false, title: '', body: '', onConfirm: null, danger: true });
       const folderForm = reactive({ open: false, name: '' });
       const moveForm = reactive({ open: false, targetFolderId: '', submitting: false, error: '' });
+      const downloadConfirm = reactive({ open: false, item: null });
       const fileInputRef = ref(null);
       const folderNameRef = ref(null);
 
       watch(
-        () => confirm.open || folderForm.open || moveForm.open,
+        () => confirm.open || folderForm.open || moveForm.open || downloadConfirm.open,
         (open) => document.body.classList.toggle('modal-open', open),
       );
 
@@ -303,6 +304,21 @@ if (fmEl) {
         }
       };
 
+      const askDownload = (item) => {
+        if (!item || !item.url) return;
+        downloadConfirm.item = item;
+        downloadConfirm.open = true;
+      };
+      const cancelDownload = () => {
+        downloadConfirm.open = false;
+        downloadConfirm.item = null;
+      };
+      const startDownload = () => {
+        const url = downloadConfirm.item && downloadConfirm.item.url;
+        cancelDownload();
+        if (url) window.location.assign(url);
+      };
+
       const askDelete = ({ type, id, name }) => {
         const isFolder = type === 'folder';
         Object.assign(confirm, {
@@ -465,14 +481,16 @@ if (fmEl) {
       };
 
       const onGlobalKey = (e) => {
-        if (e.key === 'Escape') { cancelConfirm(); closeFolderDialog(); closeMoveDialog(); }
+        if (e.key === 'Escape') {
+          cancelConfirm(); closeFolderDialog(); closeMoveDialog(); cancelDownload();
+        }
         const target = e.target;
         const editing = target && (
           target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
           || target.tagName === 'SELECT' || target.isContentEditable
         );
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !editing
-            && !confirm.open && !folderForm.open && !moveForm.open) {
+            && !confirm.open && !folderForm.open && !moveForm.open && !downloadConfirm.open) {
           e.preventDefault();
           toggleSelectAll();
         }
@@ -489,13 +507,14 @@ if (fmEl) {
 
       return {
         viewMode, selected, dragging, uploads, showUploadDock,
-        confirm, folderForm, moveForm, fileInputRef, folderNameRef,
+        confirm, folderForm, moveForm, downloadConfirm, fileInputRef, folderNameRef,
         folders, files, sortMode, sortAsc, sortedFolders, sortedFiles, fmtDate,
         dragKind, dragIndex, dragOverIndex,
         onDragStart, onDragOver, onDrop, onDragEnd,
         setView, isSelected, toggleSelect, clearSelection, selectionCount,
         totalItemCount, allSelected, toggleSelectAll,
         moveTargetOptions, hasMoveTarget, openMoveDialog, closeMoveDialog, submitMove,
+        askDownload, cancelDownload, startDownload,
         askDelete, askBulkDelete, cancelConfirm, runConfirm,
         openFolderDialog, closeFolderDialog, submitFolder,
         triggerFilePicker, onFilesPicked, closeUploadDock,

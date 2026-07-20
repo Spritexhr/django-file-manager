@@ -7,7 +7,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
 
-from .models import Folder
+from .models import Folder, validate_folder_name
 
 # Whitelist of allowed file extensions.
 # SVG and HTML are intentionally excluded as defense in depth: even though
@@ -129,12 +129,7 @@ class FolderForm(forms.ModelForm):
         fields = ['name']
 
     def clean_name(self):
-        name = (self.cleaned_data.get('name') or '').strip()
-        if not name:
-            raise ValidationError('文件夹名不能为空')
-        if any(c in name for c in ('/', '\\', '\x00')) or name in ('.', '..'):
-            raise ValidationError('文件夹名包含非法字符')
-        return name
+        return validate_folder_name(self.cleaned_data.get('name'))
 
 
 class NewUserForm(forms.Form):

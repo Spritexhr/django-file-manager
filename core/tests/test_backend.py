@@ -3,11 +3,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import Client, TestCase, override_settings
 
 from core.file_operations import save_uploaded_files
+from core.forms import FolderForm
 from core.models import File, Folder
 
 
@@ -346,3 +348,69 @@ class ResponseSafetyTests(MediaTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(payload, body)
         self.assertIn('\\u003C/script\\u003E', body)
+
+
+class RoutingAndNamingTests(MediaTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.owner)
+
+    def test_nested_folder_uses_canonical_hierarchical_url(self):
+        parent = Folder.objects.create(
+            name='项目资料', created_by=self.owner, position=1
+        )
+        child = Folder.objects.create(
+            name='历史版本', parent=parent, created_by=self.owner, position=1
+        )
+        canonical_url = child.get_absolute_url()
+
+        response = self.client.get(canonical_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '项目资料')
+        self.assertContains(response, '历史版本')
+        self.assertIn(f'{parent.id}-', canonical_url)
+        self.assertIn(f'{child.id}-', canonical_url)
+
+        legacy = self.client.get(f'/folder/{child.id}/')
+        self.assertEqual(legacy.status_code, 301)
+        self.assertEqual(legacy['Location'], canonical_url)
+
+        stale_slug = self.client.get(
+            f'/files/{parent.id}-old/{child.id}-old/'
+        )
+        self.assertEqual(stale_slug.status_code, 301)
+        self.assertEqual(stale_slug['Location'], canonical_url)
+
+        wrong_hierarchy = self.client.get(f'/files/{child.id}-wrong/')
+        self.assertEqual(wrong_hierarchy.status_code, 404)
+
+    def test_folder_name_is_normalized_and_invalid_names_are_rejected(self):
+        valid = FolderForm({'name': '  项目   资料  '})
+        self.assertTrue(valid.is_valid())
+        self.assertEqual(valid.cleaned_data['name'], '项目 资料')
+
+        for invalid_name in ('CON', '.hidden', '资料/备份', '结尾.', '控制\u200b字符'):
+            with self.subTest(name=invalid_name):
+                form = FolderForm({'name': invalid_name})
+                self.assertFalse(form.is_valid())
+                self.assertEqual(len(form.errors['name']), 1)
+
+    def test_case_insensitive_sibling_duplicate_is_rejected(self):
+        Folder.objects.create(
+            name='Projects', created_by=self.owner, position=1
+        )
+        duplicate = Folder(
+            name='projects', created_by=self.owner, position=2
+        )
+
+        with self.assertRaises(ValidationError):
+            duplicate.full_clean()
+
+    def test_file_page_exposes_visible_select_all_and_download_confirmation(self):
+        self.create_file()
+        response = self.client.get('/')
+        body = response.content.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-testid="select-all"', body)
+        self.assertIn('确认下载', body)

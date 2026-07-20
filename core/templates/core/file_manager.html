@@ -19,9 +19,9 @@
         {% for folder in breadcrumbs %}
           <span class="sep"><svg><use href="#i-chevron-right"/></svg></span>
           {% if forloop.last %}
-            <a href="{% url 'file_manager_folder' folder.id %}" class="current">{{ folder.name }}</a>
+            <a href="{{ folder.get_absolute_url }}" class="current">{{ folder.name }}</a>
           {% else %}
-            <a href="{% url 'file_manager_folder' folder.id %}">{{ folder.name }}</a>
+            <a href="{{ folder.get_absolute_url }}">{{ folder.name }}</a>
           {% endif %}
         {% endfor %}
       </nav>
@@ -49,13 +49,6 @@
             <svg><use :href="sortAsc ? '#i-arrow-up' : '#i-arrow-down'"/></svg>
           </button>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm select-all-btn" v-cloak
-                @click="toggleSelectAll()" :disabled="totalItemCount === 0"
-                :aria-pressed="allSelected ? 'true' : 'false'"
-                :aria-label="allSelected ? '取消全选' : '全选当前目录'">
-          <svg><use href="#i-check"/></svg>
-          <span v-text="allSelected ? '取消全选' : '全选'"></span>
-        </button>
         <button type="button" class="btn btn-ghost btn-sm" @click="openFolderDialog()" aria-label="新建文件夹">
           <svg><use href="#i-folder-plus"/></svg><span>新建文件夹</span>
         </button>
@@ -90,6 +83,19 @@
   {# === Workspace === #}
   <section class="workspace">
     <div class="container">
+      {% if subfolders or files %}
+        <div class="workspace-tools" v-cloak>
+          <button type="button" class="select-all-control" data-testid="select-all"
+                  @click="toggleSelectAll()" :aria-pressed="allSelected ? 'true' : 'false'"
+                  :aria-label="allSelected ? '取消全选' : '全选当前目录'">
+            <span class="selection-box" :class="[allSelected && 'checked', !allSelected && selectionCount() > 0 && 'partial']">
+              <svg><use href="#i-check"/></svg>
+            </span>
+            <span v-text="allSelected ? '取消全选' : '全选'"></span>
+          </button>
+          <span class="workspace-count" v-text="'共 ' + totalItemCount + ' 项'"></span>
+        </div>
+      {% endif %}
       {% if not subfolders and not files %}
         <div class="empty-state">
           <div class="empty-icon"><svg><use href="#i-cloud-upload"/></svg></div>
@@ -111,13 +117,13 @@
              @drop.prevent="onDrop('folder', index)"
              @dragend="onDragEnd()">
             <button type="button" class="item-check"
-                    @click.prevent="toggleSelect('folder', item.id)" aria-label="选择文件夹">
+                    @click.prevent.stop="toggleSelect('folder', item.id)" aria-label="选择文件夹">
               <svg><use href="#i-check"/></svg>
             </button>
             <div class="item-icon folder"><svg><use href="#i-folder"/></svg></div>
             <span class="item-name" :title="item.name" v-text="item.name"></span>
             <button type="button" class="item-delete"
-                    @click.prevent="askDelete({ type: 'folder', id: item.id, name: item.name })"
+                    @click.prevent.stop="askDelete({ type: 'folder', id: item.id, name: item.name })"
                     aria-label="删除文件夹">
               <svg><use href="#i-x"/></svg>
             </button>
@@ -127,21 +133,21 @@
              :class="[isSelected('file', item.id) && 'selected',
                       dragKind === 'file' && dragIndex === index && 'dragging',
                       dragKind === 'file' && dragOverIndex === index && 'drag-over']"
-             :href="item.url" target="_blank" rel="noopener"
+             :href="item.url" @click.prevent="askDownload(item)"
              :draggable="sortMode === 'manual'"
              @dragstart="onDragStart('file', index, $event)"
              @dragover.prevent="onDragOver('file', index)"
              @drop.prevent="onDrop('file', index)"
              @dragend="onDragEnd()">
             <button type="button" class="item-check"
-                    @click.prevent="toggleSelect('file', item.id)" aria-label="选择文件">
+                    @click.prevent.stop="toggleSelect('file', item.id)" aria-label="选择文件">
               <svg><use href="#i-check"/></svg>
             </button>
             <div class="item-icon" :class="item.icon_type"><svg><use :href="'#i-' + item.icon_name"/></svg></div>
             <span class="item-name" :title="item.name" v-text="item.name"></span>
             <span class="item-meta" v-text="item.size_human"></span>
             <button type="button" class="item-delete"
-                    @click.prevent="askDelete({ type: 'file', id: item.id, name: item.name })"
+                    @click.prevent.stop="askDelete({ type: 'file', id: item.id, name: item.name })"
                     aria-label="删除文件">
               <svg><use href="#i-x"/></svg>
             </button>
@@ -174,7 +180,7 @@
              @drop.prevent="onDrop('folder', index)"
              @dragend="onDragEnd()">
             <button type="button" class="row-check"
-                    @click.prevent="toggleSelect('folder', item.id)" aria-label="选择文件夹">
+                    @click.prevent.stop="toggleSelect('folder', item.id)" aria-label="选择文件夹">
               <svg><use href="#i-check"/></svg>
             </button>
             <span class="row-name">
@@ -185,7 +191,7 @@
             <span class="row-time" v-text="fmtDate(item.created_at)"></span>
             <span class="row-actions">
               <button type="button" class="item-delete"
-                      @click.prevent="askDelete({ type: 'folder', id: item.id, name: item.name })"
+                      @click.prevent.stop="askDelete({ type: 'folder', id: item.id, name: item.name })"
                       aria-label="删除文件夹">
                 <svg><use href="#i-x"/></svg>
               </button>
@@ -196,14 +202,14 @@
              :class="[isSelected('file', item.id) && 'selected',
                       dragKind === 'file' && dragIndex === index && 'dragging',
                       dragKind === 'file' && dragOverIndex === index && 'drag-over']"
-             :href="item.url" target="_blank" rel="noopener"
+             :href="item.url" @click.prevent="askDownload(item)"
              :draggable="sortMode === 'manual'"
              @dragstart="onDragStart('file', index, $event)"
              @dragover.prevent="onDragOver('file', index)"
              @drop.prevent="onDrop('file', index)"
              @dragend="onDragEnd()">
             <button type="button" class="row-check"
-                    @click.prevent="toggleSelect('file', item.id)" aria-label="选择文件">
+                    @click.prevent.stop="toggleSelect('file', item.id)" aria-label="选择文件">
               <svg><use href="#i-check"/></svg>
             </button>
             <span class="row-name">
@@ -214,7 +220,7 @@
             <span class="row-time" v-text="fmtDate(item.uploaded_at)"></span>
             <span class="row-actions">
               <button type="button" class="item-delete"
-                      @click.prevent="askDelete({ type: 'file', id: item.id, name: item.name })"
+                      @click.prevent.stop="askDelete({ type: 'file', id: item.id, name: item.name })"
                       aria-label="删除文件">
                 <svg><use href="#i-x"/></svg>
               </button>
@@ -294,7 +300,9 @@
         <div class="field">
           <label for="newFolderName">文件夹名称</label>
           <input id="newFolderName" type="text" class="input" v-model="folderForm.name"
-                 ref="folderNameRef" autocomplete="off" placeholder="例如：项目资料" required>
+                 ref="folderNameRef" autocomplete="off" placeholder="例如：项目资料"
+                 maxlength="100" required>
+          <p class="field-hint">1–100 个字符，不得包含 \\ / : * ? &quot; &lt; &gt; |，同一目录下不能重名。</p>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" @click="closeFolderDialog()">取消</button>
@@ -338,6 +346,25 @@
           </button>
         </div>
       </form>
+    </div>
+  </div>
+
+  {# === Download confirmation modal === #}
+  <div class="modal-backdrop" v-show="downloadConfirm.open" v-cloak @click.self="cancelDownload()">
+    <div class="modal download-modal" role="dialog" aria-modal="true" aria-labelledby="downloadTitle">
+      <span class="download-modal-icon"><svg><use href="#i-download"/></svg></span>
+      <h3 id="downloadTitle" class="modal-title">确认下载</h3>
+      <p class="modal-body">
+        即将下载 <strong v-text="downloadConfirm.item ? downloadConfirm.item.name : ''"></strong>
+        <span v-if="downloadConfirm.item && downloadConfirm.item.size_human"
+              v-text="'（' + downloadConfirm.item.size_human + '）'"></span>。
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="cancelDownload()">取消</button>
+        <button type="button" class="btn btn-primary" @click="startDownload()">
+          <svg><use href="#i-download"/></svg><span>下载</span>
+        </button>
+      </div>
     </div>
   </div>
 </div>
