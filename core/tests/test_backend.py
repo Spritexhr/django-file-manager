@@ -199,6 +199,128 @@ class OrderingTests(MediaTestCase):
         self.assertEqual((second.position, first.position), (1, 2))
 
 
+class MoveOperationTests(MediaTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.owner)
+
+    def test_move_mixed_selection_appends_to_target(self):
+        target = Folder.objects.create(
+            name='target', created_by=self.owner, position=1
+        )
+        moved_folder = Folder.objects.create(
+            name='folder', created_by=self.owner, position=2
+        )
+        existing_file = self.create_file(
+            name='existing.txt', folder=target, position=1
+        )
+        moved_file = self.create_file(name='move.txt', position=1)
+
+        response = self.client.post(
+            '/move/',
+            {
+                'target_folder_id': target.id,
+                'folder_ids[]': [moved_folder.id],
+                'file_ids[]': [moved_file.id],
+            },
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['moved'], 2)
+        moved_folder.refresh_from_db()
+        moved_file.refresh_from_db()
+        existing_file.refresh_from_db()
+        self.assertEqual(moved_folder.parent_id, target.id)
+        self.assertEqual(moved_folder.position, 1)
+        self.assertEqual(moved_file.folder_id, target.id)
+        self.assertEqual((existing_file.position, moved_file.position), (1, 2))
+
+    def test_move_to_root_is_supported(self):
+        source = Folder.objects.create(
+            name='source', created_by=self.owner, position=1
+        )
+        moved_file = self.create_file(folder=source, position=1)
+
+        response = self.client.post(
+            '/move/',
+            {'target_folder_id': 'root', 'file_ids[]': [moved_file.id]},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        moved_file.refresh_from_db()
+        self.assertIsNone(moved_file.folder_id)
+        self.assertEqual(moved_file.position, 1)
+
+    def test_move_folder_into_descendant_is_rejected(self):
+        parent = Folder.objects.create(
+            name='parent', created_by=self.owner, position=1
+        )
+        child = Folder.objects.create(
+            name='child', parent=parent, created_by=self.owner, position=1
+        )
+
+        response = self.client.post(
+            '/move/',
+            {'target_folder_id': child.id, 'folder_ids[]': [parent.id]},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        parent.refresh_from_db()
+        self.assertIsNone(parent.parent_id)
+
+    def test_cross_owner_and_cross_scope_moves_are_rejected(self):
+        foreign_target = Folder.objects.create(
+            name='foreign', created_by=self.other, position=1
+        )
+        root_file = self.create_file(name='root.txt', position=1)
+        denied = self.client.post(
+            '/move/',
+            {'target_folder_id': foreign_target.id, 'file_ids[]': [root_file.id]},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        source = Folder.objects.create(
+            name='source', created_by=self.owner, position=1
+        )
+        nested_file = self.create_file(
+            name='nested.txt', folder=source, position=1
+        )
+        cross_scope = self.client.post(
+            '/move/',
+            {
+                'target_folder_id': 'root',
+                'file_ids[]': [root_file.id, nested_file.id],
+            },
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+        self.assertEqual(cross_scope.status_code, 400)
+
+        root_file.refresh_from_db()
+        nested_file.refresh_from_db()
+        self.assertIsNone(root_file.folder_id)
+        self.assertEqual(nested_file.folder_id, source.id)
+
+    def test_move_to_current_folder_is_rejected(self):
+        source = Folder.objects.create(
+            name='source', created_by=self.owner, position=1
+        )
+        moved_file = self.create_file(folder=source, position=1)
+
+        response = self.client.post(
+            '/move/',
+            {'target_folder_id': source.id, 'file_ids[]': [moved_file.id]},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        moved_file.refresh_from_db()
+        self.assertEqual(moved_file.folder_id, source.id)
+
+
 class ResponseSafetyTests(MediaTestCase):
     def test_external_referer_is_not_used_for_redirect(self):
         self.client.force_login(self.owner)

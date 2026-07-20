@@ -19,7 +19,12 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .downloads import build_download_response, original_name
-from .file_operations import _next_position, delete_owned_items, save_uploaded_files
+from .file_operations import (
+    _next_position,
+    delete_owned_items,
+    move_owned_items,
+    save_uploaded_files,
+)
 from .forms import FileUploadForm, FolderForm, NewUserForm
 from .models import File, Folder
 
@@ -210,6 +215,16 @@ def file_manager(request, folder_id=None):
         }
         for f in files
     ]
+    move_targets_json = [
+        {
+            'id': folder.id,
+            'name': folder.name,
+            'parent_id': folder.parent_id,
+        }
+        for folder in Folder.objects.filter(created_by=request.user)
+        .only('id', 'name', 'parent_id', 'position')
+        .order_by('parent_id', 'position', 'id')
+    ]
 
     try:
         total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
@@ -238,6 +253,7 @@ def file_manager(request, folder_id=None):
         'files': files,
         'folders_data': folders_json,
         'files_data': files_json,
+        'move_targets_data': move_targets_json,
         'upload_form': upload_form,
         'folder_form': folder_form,
         'breadcrumbs': breadcrumbs,
@@ -342,6 +358,47 @@ def bulk_delete(request):
     messages.success(request, f'已删除 {deleted} 项')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True, 'deleted': deleted})
+    return redirect(_safe_return_url(request))
+
+
+@login_required
+@require_POST
+def move_items(request):
+    try:
+        folder_ids = _parse_ids(request.POST.getlist('folder_ids[]'), label='文件夹')
+        file_ids = _parse_ids(request.POST.getlist('file_ids[]'), label='文件')
+        raw_target_id = request.POST.get('target_folder_id', '').strip()
+        if raw_target_id in ('', 'root'):
+            target_folder_id = None
+        else:
+            target_folder_id = _parse_ids([raw_target_id], label='目标文件夹')[0]
+        moved = move_owned_items(
+            user=request.user,
+            target_folder_id=target_folder_id,
+            folder_ids=folder_ids,
+            file_ids=file_ids,
+        )
+    except ValidationError as exc:
+        error = exc.messages[0]
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'success': False, 'error': error}, status=400)
+        messages.error(request, error)
+        return redirect(_safe_return_url(request))
+    except PermissionDenied as exc:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'success': False, 'error': str(exc)}, status=403)
+        raise
+    except (IntegrityError, OperationalError):
+        logger.exception('Concurrent move conflict for user %s', request.user.pk)
+        error = '移动发生并发冲突，请刷新后重试'
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'success': False, 'error': error}, status=409)
+        messages.error(request, error)
+        return redirect(_safe_return_url(request))
+
+    messages.success(request, f'已移动 {moved} 项')
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return JsonResponse({'success': True, 'moved': moved})
     return redirect(_safe_return_url(request))
 
 

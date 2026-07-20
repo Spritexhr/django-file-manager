@@ -8,6 +8,7 @@ urlpatterns = [
     path('delete/file/<int:file_id>/', views.delete_file, name='delete_file'),
     path('delete/folder/<int:folder_id>/', views.delete_folder, name='delete_folder'),
     path('delete/bulk/', views.bulk_delete, name='bulk_delete'),
+    path('move/', views.move_items, name='move_items'),
     path('reorder/', views.reorder, name='reorder'),
     # User management (staff only)
     path('users/', views.user_management, name='user_management'),

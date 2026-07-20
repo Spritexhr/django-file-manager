@@ -49,6 +49,13 @@
             <svg><use :href="sortAsc ? '#i-arrow-up' : '#i-arrow-down'"/></svg>
           </button>
         </div>
+        <button type="button" class="btn btn-ghost btn-sm select-all-btn" v-cloak
+                @click="toggleSelectAll()" :disabled="totalItemCount === 0"
+                :aria-pressed="allSelected ? 'true' : 'false'"
+                :aria-label="allSelected ? '取消全选' : '全选当前目录'">
+          <svg><use href="#i-check"/></svg>
+          <span v-text="allSelected ? '取消全选' : '全选'"></span>
+        </button>
         <button type="button" class="btn btn-ghost btn-sm" @click="openFolderDialog()" aria-label="新建文件夹">
           <svg><use href="#i-folder-plus"/></svg><span>新建文件夹</span>
         </button>
@@ -69,6 +76,10 @@
       </div>
       <div class="selection-actions">
         <button type="button" class="btn btn-ghost btn-sm" @click="clearSelection()">取消选择</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="openMoveDialog()"
+                :disabled="!hasMoveTarget" aria-label="移动所选">
+          <svg><use href="#i-folder-move"/></svg><span>移动</span>
+        </button>
         <button type="button" class="btn btn-danger btn-sm" @click="askBulkDelete()" aria-label="删除所选">
           <svg><use href="#i-trash"/></svg><span>删除所选</span>
         </button>
@@ -140,7 +151,12 @@
         {# List view #}
         <div class="list" v-show="viewMode === 'list'" v-cloak>
           <div class="list-header">
-            <span></span>
+            <button type="button" class="header-check"
+                    :class="[allSelected && 'checked', !allSelected && selectionCount() > 0 && 'partial']"
+                    @click="toggleSelectAll()"
+                    :aria-label="allSelected ? '取消全选' : '全选当前目录'">
+              <svg><use href="#i-check"/></svg>
+            </button>
             <span>名称</span>
             <span>大小</span>
             <span>修改日期</span>
@@ -289,21 +305,60 @@
       </form>
     </div>
   </div>
+
+  {# === Move selection modal === #}
+  <div class="modal-backdrop" v-show="moveForm.open" v-cloak @click.self="closeMoveDialog()">
+    <div class="modal move-modal" role="dialog" aria-modal="true" aria-labelledby="moveTitle">
+      <div class="move-modal-heading">
+        <span class="move-modal-icon"><svg><use href="#i-folder-move"/></svg></span>
+        <div>
+          <h3 id="moveTitle" class="modal-title">移动项目</h3>
+          <p class="move-summary" v-text="'将选中的 ' + selectionCount() + ' 项移动到：'"></p>
+        </div>
+      </div>
+      <form class="folder-form" @submit.prevent="submitMove()">
+        <div class="field">
+          <label for="moveTarget">目标位置</label>
+          <select id="moveTarget" class="input move-target-select" v-model="moveForm.targetFolderId"
+                  :disabled="moveForm.submitting">
+            <option v-for="target in moveTargetOptions" :key="target.value"
+                    :value="target.value" :disabled="target.disabled"
+                    v-text="target.label"></option>
+          </select>
+          <p class="field-hint">不能选择当前目录、所选文件夹本身或其子文件夹。</p>
+          <p class="form-error" v-if="moveForm.error" v-text="moveForm.error" role="alert"></p>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" @click="closeMoveDialog()"
+                  :disabled="moveForm.submitting">取消</button>
+          <button type="submit" class="btn btn-primary"
+                  :disabled="moveForm.submitting || !moveForm.targetFolderId">
+            <svg><use href="#i-folder-move"/></svg>
+            <span v-text="moveForm.submitting ? '正在移动…' : '移动到这里'"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
 {{ folders_data|json_script:"fm-folders-data" }}
 {{ files_data|json_script:"fm-files-data" }}
+{{ move_targets_data|json_script:"fm-move-targets-data" }}
 <script>
 window.__FM_CONFIG__ = {
   csrfToken: "{{ csrf_token }}",
   deleteFileUrl: "{% url 'delete_file' 0 %}".replace("/0/", "/__ID__/"),
   deleteFolderUrl: "{% url 'delete_folder' 0 %}".replace("/0/", "/__ID__/"),
   bulkDeleteUrl: "{% url 'bulk_delete' %}",
+  moveUrl: "{% url 'move_items' %}",
   reorderUrl: "{% url 'reorder' %}",
+  currentFolderId: {% if current_folder %}{{ current_folder.id }}{% else %}null{% endif %},
   folders: JSON.parse(document.getElementById("fm-folders-data").textContent),
-  files: JSON.parse(document.getElementById("fm-files-data").textContent)
+  files: JSON.parse(document.getElementById("fm-files-data").textContent),
+  moveTargets: JSON.parse(document.getElementById("fm-move-targets-data").textContent)
 };
 </script>
 {% endblock %}

@@ -1,7 +1,7 @@
 import logging
 
 from django.contrib.auth.models import User
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Max, Q
 
@@ -118,5 +118,115 @@ def delete_owned_items(*, user, folder_ids=(), file_ids=()):
             Folder.objects.bulk_update(folders, ['position'])
             Folder.objects.filter(id__in=tree_ids).update(parent=None)
             Folder.objects.filter(id__in=tree_ids).delete()
+
+    return len(folder_ids) + len(file_ids)
+
+
+def move_owned_items(*, user, target_folder_id=None, folder_ids=(), file_ids=()):
+    """Move one current-directory selection and append it to the target.
+
+    The user row serializes position allocation. Items first receive temporary
+    positions outside the user's current range so conditional unique position
+    constraints remain valid while their parent scope changes.
+    """
+    folder_ids = set(folder_ids)
+    file_ids = set(file_ids)
+    if not folder_ids and not file_ids:
+        raise ValidationError('请先选择要移动的项目')
+
+    with transaction.atomic():
+        User.objects.select_for_update().get(pk=user.pk)
+
+        target = None
+        if target_folder_id is not None:
+            target = (
+                Folder.objects.select_for_update()
+                .filter(pk=target_folder_id, created_by=user)
+                .first()
+            )
+            if target is None:
+                raise PermissionDenied('目标文件夹不存在或无权访问')
+
+        folders = list(
+            Folder.objects.select_for_update()
+            .filter(id__in=folder_ids, created_by=user)
+            .order_by('id')
+        )
+        files = list(
+            File.objects.select_for_update()
+            .filter(id__in=file_ids, uploaded_by=user)
+            .order_by('id')
+        )
+        if {item.id for item in folders} != folder_ids:
+            raise PermissionDenied('移动列表包含无权访问的文件夹')
+        if {item.id for item in files} != file_ids:
+            raise PermissionDenied('移动列表包含无权访问的文件')
+
+        # The UI only selects the visible directory. Enforce that boundary on
+        # forged requests too, including a mixed selection of folders + files.
+        source_scopes = {item.parent_id for item in folders}
+        source_scopes.update(item.folder_id for item in files)
+        if len(source_scopes) != 1:
+            raise ValidationError('移动项目必须位于同一目录')
+        source_folder_id = source_scopes.pop()
+        if source_folder_id == target_folder_id:
+            raise ValidationError('所选项目已在目标文件夹中')
+
+        # Walking upward from the target is enough to reject both self moves
+        # and moves into any selected folder's descendants.
+        selected_folder_ids = {item.id for item in folders}
+        ancestor = target
+        seen_ancestors = set()
+        while ancestor is not None:
+            if ancestor.id in selected_folder_ids:
+                raise ValidationError('不能将文件夹移动到自身或其子文件夹中')
+            if ancestor.id in seen_ancestors:
+                raise ValidationError('目标文件夹层级存在循环')
+            seen_ancestors.add(ancestor.id)
+            if ancestor.parent_id is None:
+                break
+            ancestor = (
+                Folder.objects.select_for_update()
+                .filter(pk=ancestor.parent_id, created_by=user)
+                .first()
+            )
+            if ancestor is None:
+                raise PermissionDenied('目标目录树包含无权访问的数据')
+
+        if folders:
+            maximum = (
+                Folder.objects.filter(created_by=user)
+                .aggregate(value=Max('position'))['value']
+                or 0
+            )
+            for index, item in enumerate(folders, start=1):
+                item.position = maximum + index
+            Folder.objects.bulk_update(folders, ['position'])
+
+            target_position = _next_position(
+                Folder.objects.filter(parent=target, created_by=user)
+            )
+            for index, item in enumerate(folders):
+                item.parent = target
+                item.position = target_position + index
+            Folder.objects.bulk_update(folders, ['parent', 'position'])
+
+        if files:
+            maximum = (
+                File.objects.filter(uploaded_by=user)
+                .aggregate(value=Max('position'))['value']
+                or 0
+            )
+            for index, item in enumerate(files, start=1):
+                item.position = maximum + index
+            File.objects.bulk_update(files, ['position'])
+
+            target_position = _next_position(
+                File.objects.filter(folder=target, uploaded_by=user)
+            )
+            for index, item in enumerate(files):
+                item.folder = target
+                item.position = target_position + index
+            File.objects.bulk_update(files, ['folder', 'position'])
 
     return len(folder_ids) + len(file_ids)

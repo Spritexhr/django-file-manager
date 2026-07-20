@@ -60,11 +60,12 @@ if (fmEl) {
       const showUploadDock = ref(false);
       const confirm = reactive({ open: false, title: '', body: '', onConfirm: null, danger: true });
       const folderForm = reactive({ open: false, name: '' });
+      const moveForm = reactive({ open: false, targetFolderId: '', submitting: false, error: '' });
       const fileInputRef = ref(null);
       const folderNameRef = ref(null);
 
       watch(
-        () => confirm.open || folderForm.open,
+        () => confirm.open || folderForm.open || moveForm.open,
         (open) => document.body.classList.toggle('modal-open', open),
       );
 
@@ -72,6 +73,8 @@ if (fmEl) {
       // Manual (server position) order is the source of truth in `folders`/`files`.
       const folders = ref(Array.isArray(cfg.folders) ? cfg.folders : []);
       const files = ref(Array.isArray(cfg.files) ? cfg.files : []);
+      const moveTargets = ref(Array.isArray(cfg.moveTargets) ? cfg.moveTargets : []);
+      const currentFolderId = cfg.currentFolderId == null ? null : Number(cfg.currentFolderId);
       const sortMode = ref(localStorage.getItem('sortMode') || 'manual'); // manual | name | date
       const sortAsc = ref(localStorage.getItem('sortAsc') !== 'false');   // default ascending
 
@@ -151,6 +154,15 @@ if (fmEl) {
 
       const keyOf = (type, id) => `${type}:${id}`;
       const isSelected = (type, id) => selected.value.has(keyOf(type, id));
+      const allItemKeys = computed(() => [
+        ...folders.value.map(item => keyOf('folder', item.id)),
+        ...files.value.map(item => keyOf('file', item.id)),
+      ]);
+      const totalItemCount = computed(() => allItemKeys.value.length);
+      const allSelected = computed(() => (
+        allItemKeys.value.length > 0
+        && allItemKeys.value.every(key => selected.value.has(key))
+      ));
       const toggleSelect = (type, id) => {
         const s = new Set(selected.value);
         const key = keyOf(type, id);
@@ -159,6 +171,137 @@ if (fmEl) {
       };
       const clearSelection = () => { selected.value = new Set(); };
       const selectionCount = () => selected.value.size;
+      const toggleSelectAll = () => {
+        selected.value = allSelected.value ? new Set() : new Set(allItemKeys.value);
+      };
+
+      const selectedIds = () => {
+        const folderIds = [], fileIds = [];
+        selected.value.forEach(key => {
+          const [type, id] = key.split(':');
+          if (type === 'folder') folderIds.push(id); else fileIds.push(id);
+        });
+        return { folderIds, fileIds };
+      };
+
+      // Flatten the user's directory tree into native select options. The
+      // visited set also keeps malformed legacy cycles from hanging the UI.
+      const moveTreeOptions = computed(() => {
+        const rows = moveTargets.value.map(row => ({
+          id: Number(row.id),
+          name: row.name || '未命名文件夹',
+          parentId: row.parent_id == null ? null : Number(row.parent_id),
+        }));
+        const children = new Map();
+        rows.forEach(row => {
+          const bucket = children.get(row.parentId) || [];
+          bucket.push(row);
+          children.set(row.parentId, bucket);
+        });
+        const result = [];
+        const visited = new Set();
+        const appendTree = (startingRows, startingDepth = 0) => {
+          const stack = startingRows.slice().reverse().map(row => ({ row, depth: startingDepth }));
+          while (stack.length) {
+            const { row, depth } = stack.pop();
+            if (visited.has(row.id)) continue;
+            visited.add(row.id);
+            const indent = '— '.repeat(Math.min(depth, 8));
+            result.push({ id: row.id, label: `${indent}${depth > 8 ? '… ' : ''}${row.name}` });
+            const nested = children.get(row.id) || [];
+            for (let index = nested.length - 1; index >= 0; index--) {
+              stack.push({ row: nested[index], depth: depth + 1 });
+            }
+          }
+        };
+        appendTree(children.get(null) || []);
+        rows.forEach(row => {
+          if (!visited.has(row.id)) appendTree([row]);
+        });
+        return result;
+      });
+
+      const invalidMoveTargetIds = computed(() => {
+        const invalid = new Set(selectedIds().folderIds.map(Number));
+        if (!invalid.size) return invalid;
+        const children = new Map();
+        moveTargets.value.forEach(row => {
+          const parentId = row.parent_id == null ? null : Number(row.parent_id);
+          const bucket = children.get(parentId) || [];
+          bucket.push(Number(row.id));
+          children.set(parentId, bucket);
+        });
+        const frontier = Array.from(invalid);
+        while (frontier.length) {
+          const parentId = frontier.pop();
+          (children.get(parentId) || []).forEach(childId => {
+            if (invalid.has(childId)) return;
+            invalid.add(childId);
+            frontier.push(childId);
+          });
+        }
+        return invalid;
+      });
+
+      const moveTargetOptions = computed(() => [
+        {
+          value: 'root',
+          label: '文件（根目录）',
+          disabled: currentFolderId === null,
+        },
+        ...moveTreeOptions.value.map(target => ({
+          value: String(target.id),
+          label: target.label,
+          disabled: target.id === currentFolderId || invalidMoveTargetIds.value.has(target.id),
+        })),
+      ]);
+      const hasMoveTarget = computed(() => (
+        selected.value.size > 0 && moveTargetOptions.value.some(target => !target.disabled)
+      ));
+
+      const openMoveDialog = () => {
+        const target = moveTargetOptions.value.find(option => !option.disabled);
+        if (!target || !selected.value.size) return;
+        Object.assign(moveForm, {
+          open: true,
+          targetFolderId: target.value,
+          submitting: false,
+          error: '',
+        });
+      };
+      const closeMoveDialog = () => {
+        if (moveForm.submitting) return;
+        moveForm.open = false;
+        moveForm.error = '';
+      };
+      const submitMove = async () => {
+        if (!moveForm.targetFolderId || moveForm.submitting) return;
+        moveForm.submitting = true;
+        moveForm.error = '';
+        const { folderIds, fileIds } = selectedIds();
+        const body = new FormData();
+        body.append('csrfmiddlewaretoken', cfg.csrfToken);
+        body.append('target_folder_id', moveForm.targetFolderId);
+        folderIds.forEach(id => body.append('folder_ids[]', id));
+        fileIds.forEach(id => body.append('file_ids[]', id));
+        try {
+          const response = await fetch(cfg.moveUrl, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body,
+          });
+          let payload = {};
+          try { payload = await response.json(); } catch (e) { /* use fallback */ }
+          if (!response.ok || !payload.success) {
+            throw new Error(payload.error || '移动失败，请刷新后重试');
+          }
+          moveForm.open = false;
+          window.location.reload();
+        } catch (error) {
+          moveForm.error = error.message || '移动失败，请刷新后重试';
+          moveForm.submitting = false;
+        }
+      };
 
       const askDelete = ({ type, id, name }) => {
         const isFolder = type === 'folder';
@@ -216,11 +359,7 @@ if (fmEl) {
         postForm(url, {});
       };
       const submitBulkDelete = () => {
-        const folderIds = [], fileIds = [];
-        selected.value.forEach(key => {
-          const [type, id] = key.split(':');
-          if (type === 'folder') folderIds.push(id); else fileIds.push(id);
-        });
+        const { folderIds, fileIds } = selectedIds();
         const body = new FormData();
         folderIds.forEach(id => body.append('folder_ids[]', id));
         fileIds.forEach(id => body.append('file_ids[]', id));
@@ -326,7 +465,17 @@ if (fmEl) {
       };
 
       const onGlobalKey = (e) => {
-        if (e.key === 'Escape') { cancelConfirm(); closeFolderDialog(); }
+        if (e.key === 'Escape') { cancelConfirm(); closeFolderDialog(); closeMoveDialog(); }
+        const target = e.target;
+        const editing = target && (
+          target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+          || target.tagName === 'SELECT' || target.isContentEditable
+        );
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !editing
+            && !confirm.open && !folderForm.open && !moveForm.open) {
+          e.preventDefault();
+          toggleSelectAll();
+        }
       };
 
       onMounted(() => {
@@ -340,11 +489,13 @@ if (fmEl) {
 
       return {
         viewMode, selected, dragging, uploads, showUploadDock,
-        confirm, folderForm, fileInputRef, folderNameRef,
+        confirm, folderForm, moveForm, fileInputRef, folderNameRef,
         folders, files, sortMode, sortAsc, sortedFolders, sortedFiles, fmtDate,
         dragKind, dragIndex, dragOverIndex,
         onDragStart, onDragOver, onDrop, onDragEnd,
         setView, isSelected, toggleSelect, clearSelection, selectionCount,
+        totalItemCount, allSelected, toggleSelectAll,
+        moveTargetOptions, hasMoveTarget, openMoveDialog, closeMoveDialog, submitMove,
         askDelete, askBulkDelete, cancelConfirm, runConfirm,
         openFolderDialog, closeFolderDialog, submitFolder,
         triggerFilePicker, onFilesPicked, closeUploadDock,
