@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}File Manager{% endblock %}</title>
+  <title>{% block title %}文件{% endblock %}</title>
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <script>
     (function () {
       var t = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -22,34 +24,36 @@
   {% if not hide_header %}
   <header id="header-app" class="site-header">
     <div class="container">
-      <a href="{% url 'file_manager_root' %}" class="brand">
-        <span class="brand-mark"><svg><use href="#i-logo"/></svg></span>
-        <span class="brand-text">File Manager</span>
+      <a href="{% url 'file_manager_root' %}" class="brand" aria-label="文件">
+        <span class="brand-mark"><svg aria-hidden="true"><use href="#i-folder"/></svg></span>
+        <span class="brand-text">文件</span>
       </a>
       <div class="header-actions">
-        <button type="button" class="icon-btn theme-btn" aria-label="Toggle theme" @click="toggleTheme()">
+        <button type="button" class="icon-btn theme-btn" aria-label="切换外观" @click="toggleTheme()">
           <svg class="icon-moon" aria-hidden="true"><use href="#i-moon"/></svg>
           <svg class="icon-sun" aria-hidden="true"><use href="#i-sun"/></svg>
         </button>
         {% if user.is_authenticated %}
         <div class="user-menu">
-          <button type="button" class="user-trigger" @click="toggleMenu()">
+          <button type="button" class="user-trigger" @click="toggleMenu()"
+                  aria-label="账户菜单：{{ user.username }}"
+                  :aria-expanded="menuOpen ? 'true' : 'false'" aria-haspopup="menu">
             <span class="user-avatar">{{ user.username|first|upper }}</span>
             <span>{{ user.username }}</span>
           </button>
-          <div class="user-popover" v-show="menuOpen" v-cloak>
-            <div class="popover-header">Signed in as<strong>{{ user.username }}</strong></div>
+          <div class="user-popover" v-show="menuOpen" v-cloak role="menu">
+            <div class="popover-header">当前账户<strong>{{ user.username }}</strong></div>
             {% if user.is_staff %}
-            <a href="{% url 'user_management' %}" class="popover-action">
+            <a href="{% url 'user_management' %}" class="popover-action" role="menuitem">
               <svg><use href="#i-users"/></svg>
               <span>用户管理</span>
             </a>
             {% endif %}
             <form method="post" action="{% url 'logout' %}">
               {% csrf_token %}
-              <button type="submit" class="popover-action danger">
+              <button type="submit" class="popover-action danger" role="menuitem">
                 <svg><use href="#i-log-out"/></svg>
-                <span>Sign out</span>
+                <span>退出登录</span>
               </button>
             </form>
           </div>

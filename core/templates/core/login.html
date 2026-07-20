@@ -1,7 +1,7 @@
 {% extends 'core/base.html' %}
 {% load static %}
 
-{% block title %}Sign in · File Manager{% endblock %}
+{% block title %}登录 · 文件{% endblock %}
 
 {% block extra_css %}
   <link rel="stylesheet" href="{% static 'css/login.css' %}">
@@ -10,9 +10,9 @@
 {% block content %}
 <section class="login-page">
   <div class="login-card">
-    <div class="login-pill"><span class="pill">File Manager · Sign in</span></div>
-    <h1>Welcome <span class="accent">back</span></h1>
-    <p class="subtitle">Sign in to manage your files, folders and uploads.</p>
+    <div class="login-pill"><span class="pill">安全访问你的文件</span></div>
+    <h1>欢迎回来</h1>
+    <p class="subtitle">登录后即可管理文件、文件夹与上传任务。</p>
 
     {% if form.non_field_errors or form.errors %}
       <div class="form-error">
@@ -35,7 +35,7 @@
           {% endif %}
         </div>
       {% endfor %}
-      <button type="submit" class="btn btn-primary">Sign in</button>
+      <button type="submit" class="btn btn-primary">登录</button>
     </form>
   </div>
 </section>

@@ -16,15 +16,12 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'file_manager_project.settings')
 django.setup()
 
 from django.conf import settings
-from django.db import connection
 from django.core.management import call_command
-from core.models import User, Folder, File
+from django.db import connection
 
 def table_exists(table_name):
     """检查表是否存在"""
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=%s", [table_name])
-        return cursor.fetchone() is not None
+    return table_name in connection.introspection.table_names()
 
 def clear_all_data():
     """清除所有用户数据、文件和文件夹"""
@@ -35,29 +32,12 @@ def clear_all_data():
         print("数据库表不存在，正在运行迁移...")
         call_command('migrate')
     
-    # 1. 删除所有文件记录
-    print("删除文件记录...")
-    try:
-        File.objects.all().delete()
-        print("文件记录已删除")
-    except Exception as e:
-        print(f"删除文件记录时出错: {e}")
-    
-    # 2. 删除所有文件夹记录
-    print("删除文件夹记录...")
-    try:
-        Folder.objects.all().delete()
-        print("文件夹记录已删除")
-    except Exception as e:
-        print(f"删除文件夹记录时出错: {e}")
-    
-    # 3. 删除所有用户（包括超级用户）
-    print("删除所有用户（包括超级用户）...")
-    try:
-        User.objects.all().delete()
-        print("所有用户已删除")
-    except Exception as e:
-        print(f"删除用户时出错: {e}")
+    # Flush clears application/auth/session data and resets sequences while
+    # deliberately preserving django_migrations. Removing migration history
+    # without dropping tables makes the next migrate fail with "table exists".
+    print("清空数据库记录并重置序列...")
+    call_command('flush', interactive=False, verbosity=0)
+    print("数据库记录已清空")
     
     # 4. 删除media目录中的所有文件
     print("删除媒体文件...")
@@ -73,20 +53,11 @@ def clear_all_data():
             print(f"已清理媒体目录: {media_root}")
         except Exception as e:
             print(f"清理媒体目录时出错: {e}")
+            raise
     else:
         print("媒体目录不存在")
-    
-    # 5. 重置数据库序列
-    print("重置数据库序列...")
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM django_migrations WHERE app = 'core'")
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('core_file', 'core_folder', 'auth_user')")
-        print("数据库序列已重置")
-    except Exception as e:
-        print(f"重置数据库序列时出错: {e}")
     
     print("数据清理完成！所有用户数据已清除。")
 
 if __name__ == "__main__":
-    clear_all_data() 
+    clear_all_data()

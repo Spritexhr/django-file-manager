@@ -1,7 +1,8 @@
-import json
+import logging
 import os
 import shutil
 from functools import wraps
+from pathlib import Path
 
 from django.conf import settings
 from django.contrib import messages
@@ -10,16 +11,20 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.serializers.json import DjangoJSONEncoder
-from django.db import transaction
-from django.db.models import Max
-from django.http import JsonResponse
+from django.db import IntegrityError, OperationalError, transaction
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_POST
+from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_http_methods, require_POST
 
+from .downloads import build_download_response, original_name
+from .file_operations import _next_position, delete_owned_items, save_uploaded_files
 from .forms import FileUploadForm, FolderForm, NewUserForm
 from .models import File, Folder
+
+
+logger = logging.getLogger(__name__)
 
 
 def staff_required(view):
@@ -32,11 +37,6 @@ def staff_required(view):
             raise PermissionDenied('需要管理员权限')
         return view(request, *args, **kwargs)
     return _wrapped
-
-
-def _next_position(queryset):
-    """Return max(position)+1 within a scope so new items append at the end."""
-    return (queryset.aggregate(m=Max('position'))['m'] or 0) + 1
 
 
 _ICON_MAP = {
@@ -112,17 +112,26 @@ def file_manager(request, folder_id=None):
 
         if 'upload_file' in request.POST:
             if upload_form.is_valid():
-                pos = _next_position(
-                    File.objects.filter(folder=current_folder, uploaded_by=request.user)
-                )
-                for f in upload_form.cleaned_data['files']:
-                    File.objects.create(
-                        file=f,
+                try:
+                    save_uploaded_files(
+                        upload_form.cleaned_data['files'],
+                        user=request.user,
                         folder=current_folder,
-                        uploaded_by=request.user,
-                        position=pos,
                     )
-                    pos += 1
+                except (IntegrityError, OperationalError):
+                    logger.exception('Concurrent upload conflict for user %s', request.user.pk)
+                    error = '上传发生并发冲突，请刷新后重试'
+                    messages.error(request, error)
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        return JsonResponse({'success': False, 'errors': [error]}, status=409)
+                    return redirect(request.path)
+                except OSError:
+                    logger.exception('Storage failure while user %s uploaded files', request.user.pk)
+                    error = '文件存储暂不可用，请稍后重试'
+                    messages.error(request, error)
+                    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                        return JsonResponse({'success': False, 'errors': [error]}, status=503)
+                    return redirect(request.path)
                 if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                     return JsonResponse({'success': True})
                 return redirect(request.path)
@@ -136,13 +145,31 @@ def file_manager(request, folder_id=None):
 
         if 'create_folder' in request.POST:
             if folder_form.is_valid():
-                new_folder = folder_form.save(commit=False)
-                new_folder.parent = current_folder
-                new_folder.created_by = request.user
-                new_folder.position = _next_position(
-                    Folder.objects.filter(parent=current_folder, created_by=request.user)
-                )
-                new_folder.save()
+                try:
+                    with transaction.atomic():
+                        User.objects.select_for_update().get(pk=request.user.pk)
+                        new_folder = folder_form.save(commit=False)
+                        new_folder.parent = current_folder
+                        new_folder.created_by = request.user
+                        new_folder.position = _next_position(
+                            Folder.objects.filter(
+                                parent=current_folder,
+                                created_by=request.user,
+                            )
+                        )
+                        new_folder.full_clean()
+                        new_folder.save()
+                except ValidationError as exc:
+                    for error in exc.messages:
+                        messages.error(request, error)
+                    return redirect(request.path)
+                except (IntegrityError, OperationalError):
+                    logger.exception(
+                        'Concurrent folder creation conflict for user %s',
+                        request.user.pk,
+                    )
+                    messages.error(request, '创建发生并发冲突，请刷新后重试')
+                    return redirect(request.path)
                 return redirect(request.path)
             for _, errs in folder_form.errors.items():
                 for err in errs:
@@ -175,7 +202,7 @@ def file_manager(request, folder_id=None):
         {
             'id': f.id,
             'name': f.display_name,
-            'url': f.file.url if f.file else '',
+            'url': reverse('download_file', args=[f.id]) if f.file else '',
             'size_human': f.size_human,
             'icon_type': f.icon_type,
             'icon_name': f.icon_name,
@@ -184,20 +211,33 @@ def file_manager(request, folder_id=None):
         for f in files
     ]
 
-    total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
-    disk_capacity = {
-        'total': _humanize_bytes(total),
-        'used': _humanize_bytes(used),
-        'free': _humanize_bytes(free),
-        'percent_used': f'{(used / total) * 100:.1f}',
-    }
+    try:
+        total, used, free = shutil.disk_usage(settings.MEDIA_ROOT)
+        disk_capacity = {
+            'available': True,
+            'label': '服务器磁盘',
+            'total': _humanize_bytes(total),
+            'used': _humanize_bytes(used),
+            'free': _humanize_bytes(free),
+            'percent_used': f'{(used / total) * 100:.1f}' if total else '0.0',
+        }
+    except OSError:
+        logger.exception('Unable to read media storage capacity')
+        disk_capacity = {
+            'available': False,
+            'label': '服务器磁盘不可用',
+            'total': '',
+            'used': '',
+            'free': '',
+            'percent_used': '0.0',
+        }
 
     return render(request, 'core/file_manager.html', {
         'current_folder': current_folder,
         'subfolders': subfolders,
         'files': files,
-        'folders_json': json.dumps(folders_json, cls=DjangoJSONEncoder),
-        'files_json': json.dumps(files_json, cls=DjangoJSONEncoder),
+        'folders_data': folders_json,
+        'files_data': files_json,
         'upload_form': upload_form,
         'folder_form': folder_form,
         'breadcrumbs': breadcrumbs,
@@ -205,27 +245,45 @@ def file_manager(request, folder_id=None):
     })
 
 
-def _delete_file_record(file_obj):
-    if file_obj.file:
+def _parse_ids(values, *, label):
+    if len(values) > 10000:
+        raise ValidationError(f'{label}数量过多')
+    parsed = []
+    for value in values:
         try:
-            path = file_obj.file.path
-            if os.path.exists(path):
-                os.remove(path)
-        except (FileNotFoundError, ValueError):
-            pass
-    file_obj.delete()
+            item_id = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f'{label}包含无效 ID') from exc
+        if item_id <= 0:
+            raise ValidationError(f'{label}包含无效 ID')
+        parsed.append(item_id)
+    if len(parsed) != len(set(parsed)):
+        raise ValidationError(f'{label}包含重复 ID')
+    return parsed
 
 
-def _delete_folder_recursive(folder):
-    for f in folder.files.all():
-        _delete_file_record(f)
-    for sub in folder.subfolders.all():
-        _delete_folder_recursive(sub)
-    folder.delete()
+def _safe_return_url(request, fallback='file_manager_root'):
+    referer = request.META.get('HTTP_REFERER', '')
+    if referer and url_has_allowed_host_and_scheme(
+        referer,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return referer
+    return reverse(fallback)
 
 
-# Backwards-compat alias still imported elsewhere
-delete_folder_recursive = _delete_folder_recursive
+@login_required
+@require_http_methods(['GET', 'HEAD'])
+def download_file(request, file_id):
+    file_obj = get_object_or_404(File, id=file_id, uploaded_by=request.user)
+    try:
+        return build_download_response(request, file_obj)
+    except FileNotFoundError as exc:
+        raise Http404('文件不存在') from exc
+    except OSError:
+        logger.exception('Unable to open stored file %s', file_obj.pk)
+        return HttpResponse('文件存储暂不可用，请稍后重试', status=503)
 
 
 @login_required
@@ -233,9 +291,9 @@ delete_folder_recursive = _delete_folder_recursive
 def delete_file(request, file_id):
     file_obj = get_object_or_404(File, id=file_id, uploaded_by=request.user)
     folder_id = file_obj.folder_id
-    name = os.path.basename(file_obj.file.name) if file_obj.file else 'file'
+    name = original_name(file_obj)
     with transaction.atomic():
-        _delete_file_record(file_obj)
+        file_obj.delete()
     messages.success(request, f'文件 "{name}" 已删除')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True})
@@ -250,12 +308,14 @@ def delete_folder(request, folder_id):
     folder_obj = get_object_or_404(Folder, id=folder_id, created_by=request.user)
     name = folder_obj.name
     parent_id = folder_obj.parent_id
-    with transaction.atomic():
-        _delete_folder_recursive(folder_obj)
+    delete_owned_items(user=request.user, folder_ids=[folder_obj.id])
     messages.success(request, f'文件夹 "{name}" 及其内容已删除')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True})
-    if parent_id:
+    if parent_id and Folder.objects.filter(
+        id=parent_id,
+        created_by=request.user,
+    ).exists():
         return redirect('file_manager_folder', folder_id=parent_id)
     return redirect('file_manager_root')
 
@@ -263,52 +323,90 @@ def delete_folder(request, folder_id):
 @login_required
 @require_POST
 def bulk_delete(request):
-    folder_ids = request.POST.getlist('folder_ids[]')
-    file_ids = request.POST.getlist('file_ids[]')
+    try:
+        folder_ids = _parse_ids(request.POST.getlist('folder_ids[]'), label='文件夹')
+        file_ids = _parse_ids(request.POST.getlist('file_ids[]'), label='文件')
+    except ValidationError as exc:
+        error = exc.messages[0]
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'success': False, 'error': error}, status=400)
+        messages.error(request, error)
+        return redirect(_safe_return_url(request))
 
-    deleted = 0
-    with transaction.atomic():
-        for fid in folder_ids:
-            folder = get_object_or_404(Folder, id=fid, created_by=request.user)
-            _delete_folder_recursive(folder)
-            deleted += 1
-        for fid in file_ids:
-            obj = get_object_or_404(File, id=fid, uploaded_by=request.user)
-            _delete_file_record(obj)
-            deleted += 1
+    deleted = delete_owned_items(
+        user=request.user,
+        folder_ids=folder_ids,
+        file_ids=file_ids,
+    )
 
     messages.success(request, f'已删除 {deleted} 项')
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return JsonResponse({'success': True, 'deleted': deleted})
-    return redirect(request.META.get('HTTP_REFERER') or 'file_manager_root')
+    return redirect(_safe_return_url(request))
 
 
 @login_required
 @require_POST
 def reorder(request):
     """Persist a drag-and-drop ordering. Accepts kind=folder|file and ids[] in
-    the desired order; sets each item's position to its index. Scoped to the
-    current user so foreign ids are silently ignored."""
+    the desired order. The list must contain every item in exactly one folder
+    scope and every item must belong to the current user."""
     kind = request.POST.get('kind')
-    ids = request.POST.getlist('ids[]')
+    try:
+        ids = _parse_ids(request.POST.getlist('ids[]'), label='排序列表')
+    except ValidationError as exc:
+        return JsonResponse(
+            {'success': False, 'error': exc.messages[0]},
+            status=400,
+        )
 
     if kind == 'folder':
-        model, owner = Folder, {'created_by': request.user}
+        model = Folder
+        owner = {'created_by': request.user}
+        scope_field = 'parent_id'
     elif kind == 'file':
-        model, owner = File, {'uploaded_by': request.user}
+        model = File
+        owner = {'uploaded_by': request.user}
+        scope_field = 'folder_id'
     else:
         return JsonResponse({'success': False, 'error': 'invalid kind'}, status=400)
 
-    # Only ids that actually belong to the user get updated.
-    owned = set(model.objects.filter(id__in=ids, **owner).values_list('id', flat=True))
+    if not ids:
+        return JsonResponse({'success': True})
+
     with transaction.atomic():
-        for index, raw_id in enumerate(ids):
-            try:
-                obj_id = int(raw_id)
-            except (TypeError, ValueError):
-                continue
-            if obj_id in owned:
-                model.objects.filter(id=obj_id).update(position=index)
+        User.objects.select_for_update().get(pk=request.user.pk)
+        objects = list(
+            model.objects.select_for_update().filter(id__in=ids, **owner)
+        )
+        if len(objects) != len(ids):
+            raise PermissionDenied('排序列表包含无权访问的项目')
+
+        scope_values = {getattr(obj, scope_field) for obj in objects}
+        if len(scope_values) != 1:
+            return JsonResponse(
+                {'success': False, 'error': '排序项目必须位于同一目录'},
+                status=400,
+            )
+        scope_value = scope_values.pop()
+        expected_ids = set(
+            model.objects.filter(**owner, **{scope_field: scope_value})
+            .values_list('id', flat=True)
+        )
+        if expected_ids != set(ids):
+            return JsonResponse(
+                {'success': False, 'error': '排序列表不完整'},
+                status=400,
+            )
+
+        by_id = {obj.id: obj for obj in objects}
+        max_position = max((obj.position for obj in objects), default=0)
+        for index, item_id in enumerate(ids, start=1):
+            by_id[item_id].position = max_position + len(ids) + index
+        model.objects.bulk_update(objects, ['position'])
+        for index, item_id in enumerate(ids, start=1):
+            by_id[item_id].position = index
+        model.objects.bulk_update(objects, ['position'])
 
     return JsonResponse({'success': True})
 
@@ -338,7 +436,7 @@ def user_management(request):
         for u in users
     ]
     return render(request, 'core/user_management.html', {
-        'users_json': json.dumps(users_json, cls=DjangoJSONEncoder),
+        'users_data': users_json,
         'is_superuser': request.user.is_superuser,
     })
 
@@ -353,11 +451,15 @@ def user_create(request):
                 messages.error(request, err)
         return redirect('user_management')
 
-    user = User.objects.create_user(
-        username=form.cleaned_data['username'],
-        email=form.cleaned_data.get('email', ''),
-        password=form.cleaned_data['password'],
-    )
+    try:
+        user = User.objects.create_user(
+            username=form.cleaned_data['username'],
+            email=form.cleaned_data.get('email', ''),
+            password=form.cleaned_data['password'],
+        )
+    except IntegrityError:
+        messages.error(request, '该用户名已被占用')
+        return redirect('user_management')
     # Only a superuser may mint another admin, to prevent privilege escalation.
     if request.user.is_superuser and form.cleaned_data.get('is_staff'):
         user.is_staff = True
@@ -425,9 +527,19 @@ def user_delete(request, user_id):
     username = target.username
     # Folder/File rows cascade with the user; clear their media directory too so
     # uploaded files aren't left orphaned on disk.
-    user_media = os.path.join(settings.MEDIA_ROOT, f'user_{target.id}')
-    target.delete()
-    if os.path.isdir(user_media):
-        shutil.rmtree(user_media, ignore_errors=True)
+    user_media = Path(settings.MEDIA_ROOT) / f'user_{target.id}'
+
+    def cleanup_user_directory():
+        try:
+            if user_media.is_symlink():
+                logger.error('Refusing to remove symlinked user directory: %s', user_media)
+            elif user_media.is_dir():
+                shutil.rmtree(user_media)
+        except OSError:
+            logger.exception('Unable to remove user media directory: %s', user_media)
+
+    with transaction.atomic():
+        target.delete()
+        transaction.on_commit(cleanup_user_directory)
     messages.success(request, f'用户 "{username}" 已删除')
     return redirect('user_management')

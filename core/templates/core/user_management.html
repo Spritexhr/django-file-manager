@@ -1,7 +1,7 @@
 {% extends 'core/base.html' %}
 {% load static %}
 
-{% block title %}用户管理 · File Manager{% endblock %}
+{% block title %}用户管理 · 文件{% endblock %}
 
 {% block extra_css %}
   <link rel="stylesheet" href="{% static 'css/file_manager.css' %}">
@@ -15,13 +15,13 @@
     <div class="container">
       <nav class="breadcrumbs">
         <a href="{% url 'file_manager_root' %}" class="home-link">
-          <svg><use href="#i-home"/></svg><span>Home</span>
+          <svg><use href="#i-home"/></svg><span>文件</span>
         </a>
         <span class="sep"><svg><use href="#i-chevron-right"/></svg></span>
         <a class="current"><svg><use href="#i-users"/></svg><span>用户管理</span></a>
       </nav>
       <div class="toolbar-actions">
-        <button type="button" class="btn btn-primary btn-sm" @click="openCreate()">
+        <button type="button" class="btn btn-primary btn-sm" @click="openCreate()" aria-label="添加用户">
           <svg><use href="#i-user-plus"/></svg><span>添加用户</span>
         </button>
       </div>
@@ -79,8 +79,8 @@
 
   {# === Create user modal === #}
   <div class="modal-backdrop" v-show="createForm.open" v-cloak @click.self="closeCreate()">
-    <div class="modal" role="dialog" aria-modal="true">
-      <h3 class="modal-title">添加用户</h3>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="createUserTitle">
+      <h3 id="createUserTitle" class="modal-title">添加用户</h3>
       <form class="stack-form" @submit.prevent="submitCreate()">
         <div class="field">
           <label for="newUsername">用户名</label>
@@ -114,8 +114,8 @@
 
   {# === Change password modal === #}
   <div class="modal-backdrop" v-show="pwForm.open" v-cloak @click.self="closePassword()">
-    <div class="modal" role="dialog" aria-modal="true">
-      <h3 class="modal-title">修改密码</h3>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="passwordTitle">
+      <h3 id="passwordTitle" class="modal-title">修改密码</h3>
       <p class="modal-body">为用户 <strong v-text="pwForm.username"></strong> 设置一个新密码。</p>
       <form class="stack-form" @submit.prevent="submitPassword()">
         <div class="field">
@@ -135,8 +135,8 @@
 
   {# === Confirm modal === #}
   <div class="modal-backdrop" v-show="confirm.open" v-cloak @click.self="cancelConfirm()">
-    <div class="modal" role="dialog" aria-modal="true">
-      <h3 class="modal-title" v-text="confirm.title"></h3>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="userConfirmTitle">
+      <h3 id="userConfirmTitle" class="modal-title" v-text="confirm.title"></h3>
       <p class="modal-body" v-text="confirm.body"></p>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" @click="cancelConfirm()">取消</button>
@@ -149,6 +149,7 @@
 {% endblock %}
 
 {% block extra_js %}
+{{ users_data|json_script:"user-management-data" }}
 <script>
 window.__UM_CONFIG__ = {
   csrfToken: "{{ csrf_token }}",
@@ -157,7 +158,7 @@ window.__UM_CONFIG__ = {
   toggleActiveUrl: "{% url 'user_toggle_active' 0 %}".replace("/0/", "/__ID__/"),
   deleteUrl: "{% url 'user_delete' 0 %}".replace("/0/", "/__ID__/"),
   isSuperuser: {{ is_superuser|yesno:"true,false" }},
-  users: {{ users_json|safe }}
+  users: JSON.parse(document.getElementById("user-management-data").textContent)
 };
 </script>
 {% endblock %}

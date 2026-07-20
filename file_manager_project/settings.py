@@ -172,7 +172,13 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 
 STORAGES = {
     'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+    'staticfiles': {
+        'BACKEND': (
+            'django.contrib.staticfiles.storage.StaticFilesStorage'
+            if DEBUG
+            else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+        )
+    },
 }
 
 # Default primary key field type
@@ -182,7 +188,14 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Media files (user-uploaded files)
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+_media_root_value = os.environ.get('DJANGO_MEDIA_ROOT', '').strip()
+MEDIA_ROOT = Path(_media_root_value).expanduser() if _media_root_value else BASE_DIR / 'media'
+if not MEDIA_ROOT.is_absolute():
+    MEDIA_ROOT = BASE_DIR / MEDIA_ROOT
+
+FILE_DOWNLOAD_CHUNK_SIZE = _env_int('DJANGO_FILE_DOWNLOAD_CHUNK_KB', 1024) * 1024
+if FILE_DOWNLOAD_CHUNK_SIZE <= 0:
+    FILE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = '/'

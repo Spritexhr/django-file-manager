@@ -10,8 +10,9 @@ from django.core.exceptions import ValidationError
 from .models import Folder
 
 # Whitelist of allowed file extensions.
-# SVG and HTML are intentionally excluded: they can carry script payloads when
-# served from MEDIA_URL and rendered directly by the browser.
+# SVG and HTML are intentionally excluded as defense in depth: even though
+# downloads require authentication and use attachment disposition, these types
+# are easy to turn into active browser content if deployment rules regress.
 ALLOWED_EXTENSIONS = {
     # Images
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'tiff', 'tif',

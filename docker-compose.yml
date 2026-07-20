@@ -7,21 +7,19 @@ services:
     env_file: .env
     environment:
       DJANGO_DB_PATH: /app/db_data/db.sqlite3
-      DJANGO_SECURE_SSL_REDIRECT: "false"
-      DJANGO_BEHIND_TLS_PROXY: "true"
-      DJANGO_SECURE_HSTS_SECONDS: "0"
+      DJANGO_MEDIA_ROOT: /app/media
     command: >
       sh -c "python manage.py migrate --noinput &&
              gunicorn file_manager_project.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 1800 --access-logfile - --error-logfile -"
     ports:
-      - "8002:8000"
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8002}:8000"
     volumes:
       - db_data:/app/db_data
       - media:/app/media
     healthcheck:
       test:
         - CMD-SHELL
-        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/login/').status==200 else 1)"
+        - python -c "import urllib.request,sys; request=urllib.request.Request('http://127.0.0.1:8000/login/',headers={'X-Forwarded-Proto':'https'}); sys.exit(0 if urllib.request.urlopen(request).status==200 else 1)"
       interval: 30s
       timeout: 5s
       retries: 3

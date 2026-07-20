@@ -63,6 +63,11 @@ if (fmEl) {
       const fileInputRef = ref(null);
       const folderNameRef = ref(null);
 
+      watch(
+        () => confirm.open || folderForm.open,
+        (open) => document.body.classList.toggle('modal-open', open),
+      );
+
       // ── Items + sorting ──────────────────────────────────────────────────────
       // Manual (server position) order is the source of truth in `folders`/`files`.
       const folders = ref(Array.isArray(cfg.folders) ? cfg.folders : []);
@@ -330,6 +335,7 @@ if (fmEl) {
       });
       onUnmounted(() => {
         window.removeEventListener('keydown', onGlobalKey);
+        document.body.classList.remove('modal-open');
       });
 
       return {
@@ -388,6 +394,11 @@ if (umEl) {
       const confirm = reactive({ open: false, title: '', body: '', action: '确定', danger: true, onConfirm: null });
       const createNameRef = ref(null);
       const pwInputRef = ref(null);
+
+      watch(
+        () => createForm.open || pwForm.open || confirm.open,
+        (open) => document.body.classList.toggle('modal-open', open),
+      );
 
       // A non-superuser staff member can't act on a superuser account.
       const canModify = (u) => isSuperuser || !u.is_superuser;
@@ -450,7 +461,10 @@ if (umEl) {
         if (e.key === 'Escape') { closeCreate(); closePassword(); cancelConfirm(); }
       };
       onMounted(() => window.addEventListener('keydown', onKey));
-      onUnmounted(() => window.removeEventListener('keydown', onKey));
+      onUnmounted(() => {
+        window.removeEventListener('keydown', onKey);
+        document.body.classList.remove('modal-open');
+      });
 
       return {
         users, isSuperuser, createForm, pwForm, confirm,

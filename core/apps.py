@@ -10,3 +10,4 @@ class CoreConfig(AppConfig):
 
     def ready(self):
         Path(settings.MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
+        from . import signals  # noqa: F401
