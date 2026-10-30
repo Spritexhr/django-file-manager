@@ -109,3 +109,19 @@ persistence. Gunicorn runs with 3 workers. The optional `samba` service is gated
 by the `smb` profile, shares `media`, and binds to `127.0.0.1:445` by default;
 never expose TCP 445 publicly. Migrations run automatically in the current web
 container command. Back up the database and media volumes together.
+
+## Cursor Cloud specific instructions
+
+The Cloud Agent image does not include conda. `install` creates
+`$HOME/.local/file-manager-venv` (Python 3.12), installs `requirements.txt`,
+and places `/usr/local/bin/python` and `/usr/local/bin/pip` wrappers that exec
+that venv. Use `python manage.py` directly; do not run `conda activate`.
+
+`start` exports `DJANGO_DEBUG=true` (a `DJANGO_SECRET_KEY` is then optional),
+runs `python manage.py migrate --noinput`, and execs
+`python manage.py runserver 0.0.0.0:8000` unless port 8000 is already open.
+Sign-in is `http://127.0.0.1:8000/login/`. Create a local user with
+`python manage.py createsuperuser` when the UI needs an account. SQLite is
+`db.sqlite3`. The optional Samba profile is not started.
+
+Tests: `DJANGO_DEBUG=true python manage.py test`
